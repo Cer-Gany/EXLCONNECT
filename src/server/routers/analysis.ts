@@ -83,6 +83,42 @@ export const analysisRouter = router({
         }
       }
 
+      let screenRecordingUrl: string | null = null;
+      if ((session as Record<string, unknown>).screenRecordingUrl) {
+        const storedUrl = (session as Record<string, unknown>)
+          .screenRecordingUrl as string;
+        const storagePath = extractStoragePath(storedUrl, "recordings");
+
+        if (storagePath) {
+          screenRecordingUrl = await resolveSignedUrl(
+            "recordings",
+            storagePath,
+          );
+        }
+
+        if (!screenRecordingUrl) {
+          screenRecordingUrl = storedUrl;
+        }
+      }
+
+      let cameraRecordingUrl: string | null = null;
+      if ((session as Record<string, unknown>).cameraRecordingUrl) {
+        const storedUrl = (session as Record<string, unknown>)
+          .cameraRecordingUrl as string;
+        const storagePath = extractStoragePath(storedUrl, "recordings");
+
+        if (storagePath) {
+          cameraRecordingUrl = await resolveSignedUrl(
+            "recordings",
+            storagePath,
+          );
+        }
+
+        if (!cameraRecordingUrl) {
+          cameraRecordingUrl = storedUrl;
+        }
+      }
+
       const rawScreenshots = (session.screenshots ?? []) as SessionScreenshotEntry[];
       const { data: screenshotObjects } = await supabaseAdmin.storage
         .from("screenshots")
@@ -146,6 +182,8 @@ export const analysisRouter = router({
         totalDurationSeconds: session.totalDurationSeconds,
         audioRecordingUrl,
         audioRecordings,
+        screenRecordingUrl,
+        cameraRecordingUrl,
         audioDuration: (session as Record<string, unknown>).audioDuration as number | null,
         screenshots,
         antiCheatingLog: (session as Record<string, unknown>).antiCheatingLog as

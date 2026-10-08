@@ -35,7 +35,7 @@ import {
     RelayConnector,
     resolveRelayPrimaryPreference,
 } from "@/lib/voice/relay-routing";
-import { isBrowserPlayableTtsContentType } from "@/lib/voice/tts-content-type";
+
 import {
     AlertCircle,
     AudioLines,
@@ -801,98 +801,162 @@ function MicCheck({ done, onDone, language, allowSkip = true }: { done: boolean;
   }, [startListening]);
 
   const playTTS = useCallback(async () => {
-    stopTtsPlayback();
-    getSpeechSynthesisApi()?.cancel();
-    setError(null);
-    setPhase("requesting");
+  stopTtsPlayback();
+  setError(null);
+  setPhase("requesting");
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((t) => t.stop());
-    } catch {
-      setError("Unable to access microphone. Please check permissions.");
-      setPhase("idle");
-      return;
-    }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+  } catch {
+    setError("Unable to access microphone. Please check permissions.");
+    setPhase("idle");
+    return;
+  }
 
-    const msg = getMicTestMessage(language);
+  const msg = getMicTestMessage(language);
+  const speechSynthesis = getSpeechSynthesisApi();
 
-    try {
-      const abort = new AbortController();
-      abortRef.current = abort;
+  if (!speechSynthesis) {
+    setError("Voice playback is not supported in this browser.");
+    setPhase("idle");
+    return;
+  }
 
-      const res = await fetch(`/api/voice/tts-s2s?format=wav&t=${Date.now()}`, {
-        method: "POST",
-        cache: "no-store",
-        headers: {
-          Accept: "audio/mpeg, audio/wav",
-          "Content-Type": "application/json",
-          "X-Aural-TTS-Format": "wav",
-        },
-        body: JSON.stringify({ text: msg, language: languageRef.current }),
-        signal: abort.signal,
-      });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const utterance = new SpeechSynthesisUtterance(msg);
 
-      abortRef.current = null;
+      utterance.lang = languageRef.current || "en-US";
+      utterance.rate = 1;
+      utterance.pitch = 1;
 
-      if (res.status === 204) {
-        throw new Error("Seed TTS not available for this client");
-      }
+      utterance.onstart = () => {
+        setPhase("playing");
+      };
 
-      if (!res.ok) {
-        throw new Error(`Seed TTS HTTP ${res.status}`);
-      }
+      utterance.onend = () => {
+        resolve();
+      };
 
-      const contentType = res.headers.get("content-type") || "";
-      if (!isBrowserPlayableTtsContentType(contentType)) {
-        throw new Error(`Unexpected Seed TTS content type: ${contentType}`);
-      }
-
-      const blob = await res.blob();
-      if (blob.size === 0) {
-        throw new Error("Seed TTS returned no audio");
-      }
-
-      const audioUrl = URL.createObjectURL(blob);
-      audioObjectUrlRef.current = audioUrl;
-      setPhase("playing");
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const audio = new Audio(audioUrl);
-          audioRef.current = audio;
-          audio.preload = "auto";
-          audio.onended = () => resolve();
-          audio.onerror = () => reject(new Error("Seed TTS audio playback failed"));
-
-          const startPlayback = () => {
-            void audio.play().catch(reject);
-          };
-
-          // First decode after a fresh tab/HMR can glitch if play() races the decoder.
-          if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-            startPlayback();
-          } else {
-            audio.addEventListener("canplaythrough", () => startPlayback(), { once: true });
-            audio.load();
-          }
-        });
-      } finally {
-        audioRef.current = null;
-        if (audioObjectUrlRef.current) {
-          URL.revokeObjectURL(audioObjectUrlRef.current);
-          audioObjectUrlRef.current = null;
+      utterance.onerror = (event) => {
+        if (event.error === "canceled" || event.error === "interrupted") {
+          resolve();
+          return;
         }
-      }
-      startListeningAfterPlayback();
-      return;
-    } catch (err) {
-      abortRef.current = null;
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setError("Unable to play Seed TTS. Please retry the microphone test.");
-      setPhase("idle");
-    }
-  }, [getSpeechSynthesisApi, language, startListeningAfterPlayback, stopTtsPlayback]);
+
+        reject(new Error(`Browser TTS error: ${event.error}`));
+      };
+
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utterance);
+    });
+
+    startListeningAfterPlayback();
+  } catch {
+    setError("Unable to play the microphone test prompt. Please retry.");
+    setPhase("idle");
+  }
+}, [
+  getSpeechSynthesisApi,
+  language,
+  startListeningAfterPlayback,
+  stopTtsPlayback,
+]);
+
+  // const playTTS = useCallback(async () => {
+  //   stopTtsPlayback();
+  //   getSpeechSynthesisApi()?.cancel();
+  //   setError(null);
+  //   setPhase("requesting");
+
+  //   try {
+  //     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  //     stream.getTracks().forEach((t) => t.stop());
+  //   } catch {
+  //     setError("Unable to access microphone. Please check permissions.");
+  //     setPhase("idle");
+  //     return;
+  //   }
+
+  //   const msg = getMicTestMessage(language);
+
+  //   try {
+  //     const abort = new AbortController();
+  //     abortRef.current = abort;
+
+  //     const res = await fetch(`/api/voice/tts-s2s?format=wav&t=${Date.now()}`, {
+  //       method: "POST",
+  //       cache: "no-store",
+  //       headers: {
+  //         Accept: "audio/mpeg, audio/wav",
+  //         "Content-Type": "application/json",
+  //         "X-Aural-TTS-Format": "wav",
+  //       },
+  //       body: JSON.stringify({ text: msg, language: languageRef.current }),
+  //       signal: abort.signal,
+  //     });
+
+  //     abortRef.current = null;
+
+  //     if (res.status === 204) {
+  //       throw new Error("Seed TTS not available for this client");
+  //     }
+
+  //     if (!res.ok) {
+  //       throw new Error(`Seed TTS HTTP ${res.status}`);
+  //     }
+
+  //     const contentType = res.headers.get("content-type") || "";
+  //     if (!isBrowserPlayableTtsContentType(contentType)) {
+  //       throw new Error(`Unexpected Seed TTS content type: ${contentType}`);
+  //     }
+
+  //     const blob = await res.blob();
+  //     if (blob.size === 0) {
+  //       throw new Error("Seed TTS returned no audio");
+  //     }
+
+  //     const audioUrl = URL.createObjectURL(blob);
+  //     audioObjectUrlRef.current = audioUrl;
+  //     setPhase("playing");
+
+  //     try {
+  //       await new Promise<void>((resolve, reject) => {
+  //         const audio = new Audio(audioUrl);
+  //         audioRef.current = audio;
+  //         audio.preload = "auto";
+  //         audio.onended = () => resolve();
+  //         audio.onerror = () => reject(new Error("Seed TTS audio playback failed"));
+
+  //         const startPlayback = () => {
+  //           void audio.play().catch(reject);
+  //         };
+
+  //         // First decode after a fresh tab/HMR can glitch if play() races the decoder.
+  //         if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+  //           startPlayback();
+  //         } else {
+  //           audio.addEventListener("canplaythrough", () => startPlayback(), { once: true });
+  //           audio.load();
+  //         }
+  //       });
+  //     } finally {
+  //       audioRef.current = null;
+  //       if (audioObjectUrlRef.current) {
+  //         URL.revokeObjectURL(audioObjectUrlRef.current);
+  //         audioObjectUrlRef.current = null;
+  //       }
+  //     }
+  //     startListeningAfterPlayback();
+  //     return;
+  //   } catch (err) {
+  //     abortRef.current = null;
+  //     if (err instanceof DOMException && err.name === "AbortError") return;
+  //     setError("Unable to play Seed TTS. Please retry the microphone test.");
+  //     setPhase("idle");
+  //   }
+  // }, [getSpeechSynthesisApi, language, startListeningAfterPlayback, stopTtsPlayback]);
 
   useEffect(() => {
     return () => {
@@ -1319,7 +1383,7 @@ export function IntervieweeOnboarding({
     <header className="sticky top-0 z-50 flex h-14 items-center border-b bg-card px-4 sm:px-6">
       <div className="flex items-center gap-1">
         <AuralLogo size={28} className="shrink-0" />
-        <span className="font-heading text-base font-bold tracking-[2px]">AURAL</span>
+        <span className="font-heading text-base font-bold tracking-[2px]">EXLCONNECT</span>
       </div>
     </header>
   );

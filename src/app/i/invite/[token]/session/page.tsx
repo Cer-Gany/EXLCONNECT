@@ -118,6 +118,7 @@ export default function InviteSessionPage() {
         options: q.options,
         starterCode: q.starterCode as { language: string; code: string } | null,
         order: q.order,
+        timeLimitSeconds: q.timeLimitSeconds,
       })),
     };
 

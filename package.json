@@ -25,7 +25,8 @@
     "test:functional": "node --import tsx --test --test-concurrency=1 tests/functional.test.ts",
     "db:types": "npx supabase gen types typescript --local > src/lib/supabase/types.ts",
     "dev:voice": "npx tsx server/voice-relay.ts",
-    "dev:openai-voice": "npx tsx server/openai-voice-relay.ts"
+    "dev:openai-voice": "npx tsx server/openai-voice-relay.ts",
+    "dev:gemini-voice": "npx tsx server/gemini-voice-relay.ts"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

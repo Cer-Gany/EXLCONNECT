@@ -299,6 +299,7 @@ export type Database = {
           lastActivityAt: string;
           totalDurationSeconds: number | null;
           audioRecordingUrl: string | null;
+          screenRecordingUrl: string | null;
           audioDuration: number | null;
           screenshots: Json | null;
           createdAt: string;
@@ -324,6 +325,7 @@ export type Database = {
           lastActivityAt?: string;
           totalDurationSeconds?: number | null;
           audioRecordingUrl?: string | null;
+          screenRecordingUrl?: string | null;
           audioDuration?: number | null;
           screenshots?: Json | null;
           createdAt?: string;
@@ -349,6 +351,7 @@ export type Database = {
           lastActivityAt?: string;
           totalDurationSeconds?: number | null;
           audioRecordingUrl?: string | null;
+          screenRecordingUrl?: string | null;
           audioDuration?: number | null;
           screenshots?: Json | null;
           createdAt?: string;

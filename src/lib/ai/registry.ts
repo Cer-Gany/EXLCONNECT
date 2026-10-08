@@ -27,8 +27,8 @@ export function getProvider(idOrModel?: string | null): LLMProvider {
     }
   }
   // Default fallback order: openai → gemini → kimi → minimax
-  if (process.env.OPENAI_API_KEY) return providers.get("openai")!;
   if (process.env.GEMINI_API_KEY) return providers.get("gemini")!;
+  if (process.env.OPENAI_API_KEY) return providers.get("openai")!;
   if (process.env.KIMI_API_KEY) return providers.get("kimi")!;
   if (process.env.MINIMAX_API_KEY) return providers.get("minimax")!;
   throw new Error("No LLM provider configured. Set OPENAI_API_KEY, GEMINI_API_KEY, KIMI_API_KEY, or MINIMAX_API_KEY.");
@@ -42,10 +42,10 @@ export function listProviders(): LLMProvider[] {
  * Model used for post-interview report generation.
  * Falls back through available providers.
  */
-export const REPORT_MODEL = process.env.OPENAI_API_KEY
-  ? "gpt-4o"
-  : process.env.GEMINI_API_KEY
-    ? "gemini-3.1-flash-lite"
+export const REPORT_MODEL = process.env.GEMINI_API_KEY
+  ? "gemini-3.1-flash-lite"
+  : process.env.OPENAI_API_KEY
+    ? "gpt-4o"
     : process.env.KIMI_API_KEY
       ? "kimi-k2.6"
       : "MiniMax-M2.1-lightning";
@@ -53,10 +53,10 @@ export const REPORT_MODEL = process.env.OPENAI_API_KEY
 /**
  * Model used for interview question generation and refinement.
  */
-export const GENERATOR_MODEL = process.env.OPENAI_API_KEY
-  ? "gpt-4o-mini"
-  : process.env.GEMINI_API_KEY
-    ? "gemini-3.1-flash-lite"
+export const GENERATOR_MODEL = process.env.GEMINI_API_KEY
+  ? "gemini-3.1-flash-lite"
+  : process.env.OPENAI_API_KEY
+    ? "gpt-4o-mini"
     : process.env.KIMI_API_KEY
       ? "moonshot-v1-8k"
       : "MiniMax-M2.1-lightning";

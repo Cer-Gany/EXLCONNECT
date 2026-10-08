@@ -452,8 +452,14 @@ export function VoiceInterface({
 
   // ── Countdown timer state ────────────────────────────────────────
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+
   const timerExpiredRef = useRef(false);
   const timerStartedRef = useRef(false);
+
+  // ── Per-question countdown timer ───────────────────────────────
+  const [questionRemainingSeconds, setQuestionRemainingSeconds] =
+    useState<number | null>(null);
+  const questionTimerExpiredRef = useRef(false);
 
   // ── Multiple drawings state ───────────────────────────────────
   interface Drawing {
@@ -777,6 +783,27 @@ export function VoiceInterface({
     }, 1000);
     return () => clearInterval(id);
   }, [remainingSeconds]);
+
+  // Per-question countdown tick.
+  useEffect(() => {
+    if (
+      preview ||
+      !voice.isConnected ||
+      questionRemainingSeconds === null ||
+      questionRemainingSeconds <= 0
+    ) {
+      return;
+    }
+
+    const id = setInterval(() => {
+      setQuestionRemainingSeconds((prev) => {
+        if (prev === null) return null;
+        return prev <= 1 ? 0 : prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [questionRemainingSeconds, voice.isConnected, preview]);
 
   // ── Whiteboard persistence ──────────────────────────────────────
   /** Persist a single drawing to the backend. */
@@ -1160,19 +1187,56 @@ export function VoiceInterface({
     }
   }, [drawings, activeDrawingIdx, persistDrawing, codeSnippets, activeSnippetIdx, persistCodeSnippet]);
 
-  const handlePreviousQuestion = useCallback(() => {
-    void saveCurrentContent().catch((err) => {
+  const handlePreviousQuestion = useCallback(async () => {
+    try {
+      await saveCurrentContent();
+    } catch (err) {
       console.error("[voice] Failed to save content before previous question:", err);
-    });
-    voice.previousQuestion();
+    } finally {
+      voice.previousQuestion();
+    }
   }, [saveCurrentContent, voice]);
 
-  const handleNextQuestion = useCallback(() => {
-    void saveCurrentContent().catch((err) => {
+  const handleNextQuestion = useCallback(async () => {
+    try {
+      await saveCurrentContent();
+    } catch (err) {
       console.error("[voice] Failed to save content before next question:", err);
-    });
-    voice.nextQuestion();
+    } finally {
+      voice.nextQuestion();
+    }
   }, [saveCurrentContent, voice]);
+
+  // Automatically move to the next question when its timer expires.
+  useEffect(() => {
+    if (
+      preview ||
+      questionRemainingSeconds !== 0 ||
+      questionTimerExpiredRef.current ||
+      !voice.isConnected ||
+      voice.currentQuestionIndex < 0
+    ) {
+      return;
+    }
+
+    questionTimerExpiredRef.current = true;
+
+    const isLastQuestion =
+      voice.currentQuestionIndex >= voice.totalQuestions - 1;
+
+    if (isLastQuestion) {
+      handleEndInterviewRef.current("COMPLETED");
+    } else {
+      handleNextQuestion();
+    }
+  }, [
+    questionRemainingSeconds,
+    preview,
+    voice.isConnected,
+    voice.currentQuestionIndex,
+    voice.totalQuestions,
+    handleNextQuestion,
+  ]);
 
   // ── Editor toggle helpers (save before deactivate, restore on activate)
   const saveCodeEditorState = useCallback(() => {
@@ -1289,13 +1353,21 @@ export function VoiceInterface({
               onCheckpointError: (error) =>
                 console.error("[voice] Failed to checkpoint screenshot metadata:", error),
             }),
-            45_000,
+            300_000,
             "stop recording",
           );
+          console.log("[voice] FINAL RECORDING RESULT:", {
+            audioUrl: result.audioUrl,
+            screenRecordingUrl: result.screenRecordingUrl,
+            cameraRecordingUrl: result.cameraRecordingUrl,
+            screenshots: result.screenshots?.length,
+          });
           await withTimeout(
             saveRecordingMetadata({
               audioRecordingUrl: result.audioUrl,
               audioDuration: result.audioDuration,
+              screenRecordingUrl: result.screenRecordingUrl,
+              cameraRecordingUrl: result.cameraRecordingUrl,
               screenshots: result.screenshots,
             }),
             8000,
@@ -1420,6 +1492,7 @@ export function VoiceInterface({
   const sortedQuestions = interviewContext.questions.slice().sort((a, b) => a.order - b.order);
   const currentQVoice = sortedQuestions[voice.currentQuestionIndex];
   const currentQuestionText = currentQVoice?.text || "";
+  const currentQuestionTimeLimit = currentQVoice?.timeLimitSeconds ?? null;
   const isCodingQuestion = currentQVoice?.type === "CODING";
   const isWhiteboardQuestion = currentQVoice?.type === "WHITEBOARD";
   const showVoiceTransitioning = voice.isTransitioning;
@@ -1431,6 +1504,43 @@ export function VoiceInterface({
     !showVoiceProcessing &&
     !showVoiceSpeaking &&
     voice.isListening;
+
+  // Initialize the per-question countdown once for each question.
+  // A voice reconnect must not reset the candidate's remaining time.
+  const questionTimerInitializedForIndexRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (preview || !voice.isConnected || voice.currentQuestionIndex < 0) return;
+
+    if (
+      questionTimerInitializedForIndexRef.current ===
+      voice.currentQuestionIndex
+    ) {
+      return;
+    }
+
+    questionTimerInitializedForIndexRef.current = voice.currentQuestionIndex;
+    questionTimerExpiredRef.current = false;
+
+    const fallbackSeconds =
+      currentQVoice?.type === "CODING"
+        ? 300
+        : currentQVoice?.type === "WHITEBOARD"
+          ? 300
+          : 90;
+
+    setQuestionRemainingSeconds(
+      currentQuestionTimeLimit && currentQuestionTimeLimit > 0
+        ? currentQuestionTimeLimit
+        : fallbackSeconds,
+    );
+  }, [
+    voice.currentQuestionIndex,
+    currentQuestionTimeLimit,
+    currentQVoice?.type,
+    voice.isConnected,
+    preview,
+  ]);
 
   const codeEditorInitialData = useMemo(() => {
     const snippet = codeSnippets[activeSnippetIdx];
@@ -1646,6 +1756,16 @@ export function VoiceInterface({
             <div className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${isTimeLow ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
               <Clock className="h-3 w-3" />
               <span>{formatTime(remainingSeconds)} left</span>
+            </div>
+          )}
+          {questionRemainingSeconds !== null && (
+            <div className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${
+              questionRemainingSeconds <= 10
+                ? "bg-destructive/10 text-destructive"
+                : "bg-primary/10 text-primary"
+            }`}>
+              <Clock className="h-3 w-3" />
+              <span>Q Timer: {formatTime(questionRemainingSeconds)}</span>
             </div>
           )}
         </div>

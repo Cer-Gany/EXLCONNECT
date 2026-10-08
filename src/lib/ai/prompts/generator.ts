@@ -42,7 +42,19 @@ GUIDELINES:
 - Use OPEN_ENDED for free-text/verbal responses, SINGLE_CHOICE when the participant must pick exactly one option, MULTIPLE_CHOICE when multiple selections are allowed, CODING for programming/algorithm questions, and RESEARCH when the goal is to extract as much detailed information as possible on a topic
 - For SINGLE_CHOICE and MULTIPLE_CHOICE questions, ALWAYS provide 2-6 clear option strings in the "options" field
 - For CODING questions, set "options" to null. Write a clear problem statement in the question text. Include a "starterCode" object with "language" and "code" fields containing a code template for the participant.
-- Suggest time limits where appropriate
+- Assign a specific time limit to EVERY question using the "timeLimitSeconds" field. Never leave it null.
+- Determine the time limit based on question difficulty, expected reasoning effort, response complexity, and question type.
+- For EASY conceptual, verbal, or choice-based questions, use approximately 45-60 seconds.
+- For MEDIUM conceptual, verbal, or choice-based questions, use approximately 60-90 seconds.
+- For HARD conceptual, analytical, or scenario-based questions, use approximately 90-120 seconds.
+- For EASY CODING questions, use approximately 180 seconds (3 minutes).
+- For MEDIUM CODING questions, use approximately 300 seconds (5 minutes).
+- For HARD CODING questions, use approximately 480 seconds (8 minutes).
+- For WHITEBOARD questions, use approximately 240-420 seconds (4-7 minutes), depending on complexity.
+- CODING questions must receive substantially more time than equivalent conceptual questions because the participant needs time to understand the problem, write code, and reason about the solution.
+- If a question requires multiple reasoning steps, debugging, implementation, calculations, or detailed explanation, increase its time limit appropriately.
+- Do not assign the same time limit to every question unless their complexity is genuinely similar.
+- If an overall target interview duration is provided, keep the sum of question time limits reasonably aligned with that target while still giving coding questions adequate time.
 - Assessment criteria should be specific dimensions the participant will be evaluated on (e.g. "Communication Skills", "Problem Solving Ability", "Cultural Fit")
 
 QUESTION TYPES:
@@ -67,7 +79,7 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
       "text": "string",
       "type": "OPEN_ENDED" | "SINGLE_CHOICE" | "MULTIPLE_CHOICE" | "CODING" | "WHITEBOARD" | "RESEARCH",
       "description": "string (helper text for the question)",
-      "timeLimitSeconds": number | null,
+      "timeLimitSeconds": number,
       "isRequired": true,
       "options": { "options": ["string", "string", ...], "allowMultiple": false } | null,
       "followUpPrompts": ["string"],
@@ -146,7 +158,7 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
       "text": "string",
       "type": "OPEN_ENDED" | "SINGLE_CHOICE" | "MULTIPLE_CHOICE" | "CODING" | "WHITEBOARD" | "RESEARCH",
       "description": "string (helper text for the question)",
-      "timeLimitSeconds": number | null,
+      "timeLimitSeconds": number,
       "isRequired": true,
       "options": { "options": ["string", "string", ...], "allowMultiple": false } | null,
       "followUpPrompts": ["string"],

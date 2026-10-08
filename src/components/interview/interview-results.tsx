@@ -43,6 +43,7 @@ import {
   MessageSquare,
   Mic,
   Monitor,
+  Video,
   PenLine,
   Search,
   SmilePlus,
@@ -1082,39 +1083,64 @@ function SessionDetail({
                     </Badge>
                   </CardTitle>
                 </CardHeader>
+
                 <CardContent>
-                  <div className="space-y-1.5">
-                    {(() => {
-                      const counts: Record<string, number> = {};
-                      for (const v of antiCheatingLog) {
-                        const label =
-                          v.type === "page_departure"
+                  <div className="space-y-2">
+                    {antiCheatingLog.map((v, index) => {
+                      const label =
+                        v.type === "page_departure"
+                          ? "Page departure"
+                          : v.type === "tab_switch"
                             ? "Page departure"
-                            : v.type === "tab_switch"
+                            : v.type === "focus_lost"
                               ? "Page departure"
-                              : v.type === "focus_lost"
-                                ? "Page departure"
-                                : v.type === "paste"
-                                  ? "External paste blocked"
-                                  : v.type === "multi_screen"
-                                    ? "Multi-screen detected"
-                                    : v.type;
-                        counts[label] = (counts[label] || 0) + 1;
-                      }
-                      return Object.entries(counts).map(([label, count]) => (
+                              : v.type === "paste"
+                                ? "External paste blocked"
+                                : v.type === "multi_screen"
+                                  ? "Multi-screen detected"
+                                  : v.type;
+
+                      const eventTime = new Date(v.timestamp);
+
+                      return (
                         <div
-                          key={label}
-                          className="flex items-center justify-between rounded-md bg-amber-50 px-3 py-1.5 text-sm dark:bg-amber-950/20"
+                          key={`${v.timestamp}-${v.type}-${index}`}
+                          className="rounded-lg border bg-amber-50/60 px-3 py-2.5 dark:bg-amber-950/20"
                         >
-                          <span className="text-amber-800 dark:text-amber-300">
-                            {label}
-                          </span>
-                          <Badge variant="secondary" className="text-xs">
-                            {count}
-                          </Badge>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                                {label}
+                              </p>
+
+                              {v.detail && (
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  {v.detail}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="shrink-0 text-right">
+                              <p className="text-xs font-medium text-muted-foreground">
+                                {eventTime.toLocaleTimeString(undefined, {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                  second: "2-digit",
+                                })}
+                              </p>
+
+                              <p className="text-[10px] text-muted-foreground/70">
+                                {eventTime.toLocaleDateString(undefined, {
+                                  day: "2-digit",
+                                  month: "short",
+                                  year: "numeric",
+                                })}
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                      ));
-                    })()}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -1208,6 +1234,46 @@ function SessionDetail({
                 </Card>
               );
             })()}
+
+            {/* Full screen video recording */}
+            {summary.data?.screenRecordingUrl && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4" />
+                    Screen Recording
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <video
+                    controls
+                    preload="metadata"
+                    src={summary.data.screenRecordingUrl}
+                    className="w-full rounded-lg border bg-black"
+                  />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Camera video recording */}
+            {summary.data?.cameraRecordingUrl && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Video className="h-4 w-4" />
+                    Camera Recording
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <video
+                    controls
+                    preload="metadata"
+                    src={summary.data.cameraRecordingUrl}
+                    className="w-full rounded-lg border bg-black"
+                  />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Screenshots */}
             {(() => {

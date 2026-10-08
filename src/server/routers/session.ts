@@ -707,6 +707,8 @@ export const sessionRouter = router({
       z.object({
         sessionId: z.string(),
         audioRecordingUrl: z.string().optional(),
+        screenRecordingUrl: z.string().optional(),
+        cameraRecordingUrl: z.string().optional(),
         audioDuration: z.number().nullable().optional(),
         segmentIndex: z.number().optional(),
         screenshots: z
@@ -723,11 +725,14 @@ export const sessionRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const needsExistingMedia =
-        input.screenshots !== undefined || input.audioRecordingUrl !== undefined;
+        input.screenshots !== undefined ||
+        input.audioRecordingUrl !== undefined ||
+        input.screenRecordingUrl !== undefined ||
+        input.cameraRecordingUrl !== undefined;
       const { data: storedSession, error: mediaReadError } = needsExistingMedia
         ? await ctx.supabase
             .from("sessions")
-            .select("audioRecordingUrl, audioRecordings, screenshots")
+            .select("audioRecordingUrl, screenRecordingUrl, cameraRecordingUrl, audioRecordings, screenshots")
             .eq("id", input.sessionId)
             .single()
         : { data: null, error: null };
@@ -746,6 +751,13 @@ export const sessionRouter = router({
       }
       if (input.audioDuration !== undefined && shouldReplacePrimaryRecording) {
         updateData.audioDuration = input.audioDuration;
+      }
+
+      if (input.screenRecordingUrl) {
+        updateData.screenRecordingUrl = input.screenRecordingUrl;
+      }
+      if (input.cameraRecordingUrl) {
+        updateData.cameraRecordingUrl = input.cameraRecordingUrl;
       }
       if (input.screenshots !== undefined) {
         updateData.screenshots = mergeScreenshotEntries(

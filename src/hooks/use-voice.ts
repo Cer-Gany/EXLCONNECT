@@ -47,6 +47,7 @@ export interface InterviewContext {
   options?: any;
   starterCode?: { language: string; code: string } | null;
   order: number;
+  timeLimitSeconds?: number | null;
   }>;
 }
 

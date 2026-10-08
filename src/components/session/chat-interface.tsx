@@ -61,6 +61,7 @@ interface Interview {
     type: string;
     description?: string | null;
     starterCode?: { language: string; code: string } | null;
+    timeLimitSeconds?: number | null;
   }[];
 }
 
@@ -149,6 +150,78 @@ export function ChatInterface({
     }, 1000);
     return () => clearInterval(id);
   }, [remainingSeconds]);
+
+  // ── Per-question countdown timer ───────────────────────────────
+  const [questionRemainingSeconds, setQuestionRemainingSeconds] =
+    useState<number | null>(null);
+  const questionTimerExpiredRef = useRef(false);
+
+  const currentQuestionTimeLimit =
+    interview.questions[currentQuestion]?.timeLimitSeconds ?? null;
+
+  useEffect(() => {
+    if (preview) return;
+
+    questionTimerExpiredRef.current = false;
+
+    // Fallback for older questions that don't have an AI-generated limit.
+    const fallbackSeconds =
+      interview.questions[currentQuestion]?.type === "CODING"
+        ? 300
+        : interview.questions[currentQuestion]?.type === "WHITEBOARD"
+          ? 300
+          : 90;
+
+    setQuestionRemainingSeconds(
+      currentQuestionTimeLimit && currentQuestionTimeLimit > 0
+        ? currentQuestionTimeLimit
+        : fallbackSeconds,
+    );
+  }, [currentQuestion, currentQuestionTimeLimit, preview]);
+
+  useEffect(() => {
+    if (preview || questionRemainingSeconds === null) return;
+    if (questionRemainingSeconds <= 0) return;
+
+    const id = setInterval(() => {
+      setQuestionRemainingSeconds((prev) => {
+        if (prev === null) return null;
+        return prev <= 1 ? 0 : prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [questionRemainingSeconds, preview]);
+
+  // ── Auto-advance when per-question timer expires ───────────────
+  useEffect(() => {
+    if (
+      preview ||
+      questionRemainingSeconds !== 0 ||
+      questionTimerExpiredRef.current ||
+      sending ||
+      aiTyping ||
+      finishing
+    ) {
+      return;
+    }
+
+    questionTimerExpiredRef.current = true;
+
+    if (currentQuestion < interview.questions.length - 1) {
+      void handleQuestionTransition("next");
+    } else {
+      void handleFinishInterview();
+    }
+  }, [
+    questionRemainingSeconds,
+    currentQuestion,
+    interview.questions.length,
+    preview,
+    sending,
+    aiTyping,
+    finishing,
+  ]);
 
   // ── Multiple drawings state ───────────────────────────────────
   interface Drawing {
@@ -1198,16 +1271,35 @@ export function ChatInterface({
     finishLoading: finishing,
   };
 
+  const isQuestionTimeLow =
+    questionRemainingSeconds !== null && questionRemainingSeconds <= 15;
+
   const composerTimer =
-    remainingSeconds !== null ? (
-      <div
-        className={cn(
-          "flex items-center gap-1.5 px-1 text-xs font-medium tabular-nums",
-          isTimeLow ? "text-destructive" : "text-muted-foreground",
+    remainingSeconds !== null || questionRemainingSeconds !== null ? (
+      <div className="flex items-center gap-3 px-1 text-xs font-medium tabular-nums">
+        {questionRemainingSeconds !== null && (
+          <div
+            className={cn(
+              "flex items-center gap-1.5",
+              isQuestionTimeLow ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            <span>Question: {formatTime(questionRemainingSeconds)}</span>
+          </div>
         )}
-      >
-        <Clock className="h-3.5 w-3.5" />
-        <span>{formatTime(remainingSeconds)} left</span>
+
+        {remainingSeconds !== null && (
+          <div
+            className={cn(
+              "flex items-center gap-1.5 border-l pl-3",
+              isTimeLow ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            <span>Interview: {formatTime(remainingSeconds)}</span>
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -1228,6 +1320,34 @@ export function ChatInterface({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {questionRemainingSeconds !== null && (
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold tabular-nums",
+                  isQuestionTimeLow
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : "text-muted-foreground",
+                )}
+              >
+                <Clock className="h-3.5 w-3.5" />
+                <span>Q: {formatTime(questionRemainingSeconds)}</span>
+              </div>
+            )}
+
+            {remainingSeconds !== null && (
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold tabular-nums",
+                  isTimeLow
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : "text-muted-foreground",
+                )}
+              >
+                <Clock className="h-3.5 w-3.5" />
+                <span>Total: {formatTime(remainingSeconds)}</span>
+              </div>
+            )}
+
             <IntervieweeHelpPopover mode="chat" />
           </div>
         </div>

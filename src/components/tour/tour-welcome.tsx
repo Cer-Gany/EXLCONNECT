@@ -25,7 +25,7 @@ export function TourWelcome() {
         <div className="relative bg-gradient-to-br from-primary/10 via-primary/5 to-orange-50 px-6 pt-6 pb-0">
           <Image
             src="/images/marketing/hero-screenshots-sm.webp"
-            alt="Aural platform preview"
+            alt="EXLConnect platform preview"
             width={800}
             height={450}
             className="w-full h-auto rounded-t-lg"
@@ -37,7 +37,7 @@ export function TourWelcome() {
         {/* Content */}
         <div className="px-8 pb-8 pt-2 text-center space-y-3">
           <h2 className="text-xl font-bold text-gray-900">
-            Welcome to Aural!
+            Welcome to EXLConnect!
           </h2>
           <p className="text-[15px] font-medium text-gray-700">
             Explore each section with this quick guided tour.

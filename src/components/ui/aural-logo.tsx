@@ -22,7 +22,7 @@ export function AuralLogo({ size = 32, className }: AuralLogoProps) {
       height={size}
       className={className}
       role="img"
-      aria-label="Aural logo"
+      aria-label="EXLConnect logo"
     >
       {bars.map((bar, i) => (
         <rect

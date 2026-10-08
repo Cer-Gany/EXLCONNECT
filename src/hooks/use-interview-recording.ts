@@ -32,6 +32,42 @@ interface UseInterviewRecordingOptions {
  * WebM files from MediaRecorder often have Infinity/missing duration;
  * the seek-to-end trick forces the browser to compute it.
  */
+function stopMediaRecorderSafely(
+  recorder: MediaRecorder,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (recorder.state === "inactive") {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+
+    const timeout = setTimeout(() => {
+      log.warn(`${label} recorder stop timed out; continuing cleanup`);
+      finish();
+    }, timeoutMs);
+
+    recorder.addEventListener("stop", finish, { once: true });
+
+    try {
+      recorder.stop();
+    } catch (err) {
+      log.warn(`${label} recorder stop failed; continuing cleanup`, err);
+      finish();
+    }
+  });
+}
+
 function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
@@ -96,6 +132,12 @@ export function useInterviewRecording({
 
   // Refs for recording infrastructure
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const screenRecorderRef = useRef<MediaRecorder | null>(null);
+  const cameraRecorderRef = useRef<MediaRecorder | null>(null);
+  const screenChunksRef = useRef<Blob[]>([]);
+  const cameraChunksRef = useRef<Blob[]>([]);
+  const screenMimeRef = useRef<string>("");
+  const cameraMimeRef = useRef<string>("");
   const chunksRef = useRef<Blob[]>([]);
   const audioMimeRef = useRef<string>("");
   const mixCtxRef = useRef<AudioContext | null>(null);
@@ -162,6 +204,127 @@ export function useInterviewRecording({
         log.warn("Screen share not available:", err);
       }
     }
+  }, []);
+
+  /** Start continuous screen video recording using the already-acquired screen stream. */
+  const startCameraRecording = useCallback(() => {
+    const camera = cameraStreamRef.current;
+
+    if (!camera) {
+      log.warn("Cannot start camera recording: camera stream unavailable");
+      return;
+    }
+
+    if (
+      cameraRecorderRef.current &&
+      cameraRecorderRef.current.state !== "inactive"
+    ) {
+      return;
+    }
+
+    const mimeCandidates = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+
+    const mimeType = mimeCandidates.find((mime) =>
+      MediaRecorder.isTypeSupported(mime),
+    );
+
+    if (!mimeType) {
+      log.error("No supported camera recording MIME type found");
+      return;
+    }
+
+    cameraChunksRef.current = [];
+    cameraMimeRef.current = mimeType;
+
+    const recorder = new MediaRecorder(camera, {
+      mimeType,
+    });
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        cameraChunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onerror = (event) => {
+      log.error("Camera recorder error:", event);
+    };
+
+    recorder.onstop = () => {
+      log.info(
+        "Camera recording stopped. Chunks:",
+        cameraChunksRef.current.length,
+      );
+    };
+
+    recorder.start(5000);
+    cameraRecorderRef.current = recorder;
+
+    log.info("Camera video recording started:", mimeType);
+  }, []);
+
+  const startScreenRecording = useCallback(() => {
+    const screen = screenStreamRef.current;
+
+    if (!screen) {
+      log.warn("Cannot start screen recording: screen stream unavailable");
+      return;
+    }
+
+    if (
+      screenRecorderRef.current &&
+      screenRecorderRef.current.state !== "inactive"
+    ) {
+      return;
+    }
+
+    const mimeCandidates = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+
+    const mimeType = mimeCandidates.find((mime) =>
+      MediaRecorder.isTypeSupported(mime),
+    );
+
+    if (!mimeType) {
+      log.error("No supported screen recording MIME type found");
+      return;
+    }
+
+    screenChunksRef.current = [];
+    screenMimeRef.current = mimeType;
+
+    const recorder = new MediaRecorder(screen, {
+      mimeType,
+    });
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        screenChunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onerror = (event) => {
+      log.error("Screen recorder error:", event);
+    };
+
+    recorder.onstop = () => {
+      log.info(
+        "Screen recording stopped. Chunks:",
+        screenChunksRef.current.length,
+      );
+    };
+
+    recorder.start(5000);
+    screenRecorderRef.current = recorder;
+
+    log.info("Screen video recording started:", mimeType);
   }, []);
 
   /** Pipe a mic MediaStream into the recording mixer. */
@@ -322,6 +485,10 @@ export function useInterviewRecording({
       // Acquire camera + screen
       await acquireStreams();
 
+      // Start continuous camera and screen video recordings.
+      startCameraRecording();
+      startScreenRecording();
+
       // Set up hidden video elements for screenshot capture
       if (!cameraVideoRef.current) {
         const v = document.createElement("video");
@@ -360,7 +527,16 @@ export function useInterviewRecording({
       setIsRecording(true);
       log.info("Started");
     },
-    [enabled, isRecording, acquireStreams, attachMicStream, takeScreenshots, screenshotIntervalMs],
+    [
+      enabled,
+      isRecording,
+      acquireStreams,
+      attachMicStream,
+      startCameraRecording,
+      startScreenRecording,
+      takeScreenshots,
+      screenshotIntervalMs,
+    ],
   );
 
   /**
@@ -370,6 +546,8 @@ export function useInterviewRecording({
   const stop = useCallback(async (): Promise<{
     audioUrl?: string;
     audioDuration?: number;
+    screenRecordingUrl?: string;
+    cameraRecordingUrl?: string;
     screenshots: ScreenshotEntry[];
   }> => {
     if (stoppedRef.current) {
@@ -431,6 +609,100 @@ export function useInterviewRecording({
       }
     }
 
+    // Stop continuous camera video recording and upload the full interview video.
+    let cameraRecordingUrl: string | undefined;
+    const cameraRecorder = cameraRecorderRef.current;
+
+    if (cameraRecorder && cameraRecorder.state !== "inactive") {
+      await stopMediaRecorderSafely(cameraRecorder, "Camera");
+    }
+
+    const cameraMime = cameraMimeRef.current || "video/webm";
+    const cameraBlob = new Blob(cameraChunksRef.current, {
+      type: cameraMime,
+    });
+
+    if (cameraBlob.size > 0) {
+      try {
+        const fname = `camera-recording-${Date.now()}.webm`;
+        const form = new FormData();
+
+        form.append("file", cameraBlob, fname);
+        form.append("sessionId", sessionId);
+        form.append("type", "recording");
+        form.append("filename", fname);
+
+        const res = await fetch("/api/session/upload", {
+          method: "POST",
+          body: form,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          cameraRecordingUrl = data.url;
+          log.info("Camera recording uploaded:", cameraRecordingUrl);
+        } else {
+          log.error(
+            "Camera recording upload failed:",
+            await res.text(),
+          );
+        }
+      } catch (err) {
+        log.error("Camera recording upload failed:", err);
+      }
+    }
+
+    cameraRecorderRef.current = null;
+    cameraChunksRef.current = [];
+    cameraMimeRef.current = "";
+
+    // Stop continuous screen video recording and upload the full interview video.
+    let screenRecordingUrl: string | undefined;
+    const screenRecorder = screenRecorderRef.current;
+
+    if (screenRecorder && screenRecorder.state !== "inactive") {
+      await stopMediaRecorderSafely(screenRecorder, "Screen");
+    }
+
+    const screenMime = screenMimeRef.current || "video/webm";
+    const screenBlob = new Blob(screenChunksRef.current, {
+      type: screenMime,
+    });
+
+    if (screenBlob.size > 0) {
+      try {
+        const fname = `screen-recording-${Date.now()}.webm`;
+        const form = new FormData();
+
+        form.append("file", screenBlob, fname);
+        form.append("sessionId", sessionId);
+        form.append("type", "recording");
+        form.append("filename", fname);
+
+        const res = await fetch("/api/session/upload", {
+          method: "POST",
+          body: form,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          screenRecordingUrl = data.url;
+          log.info("Screen recording uploaded:", screenRecordingUrl);
+        } else {
+          log.error(
+            "Screen recording upload failed:",
+            await res.text(),
+          );
+        }
+      } catch (err) {
+        log.error("Screen recording upload failed:", err);
+      }
+    }
+
+    screenRecorderRef.current = null;
+    screenChunksRef.current = [];
+    screenMimeRef.current = "";
+
     // Disconnect mic source
     try { micSourceRef.current?.disconnect(); } catch { /* noop */ }
     micSourceRef.current = null;
@@ -465,6 +737,8 @@ export function useInterviewRecording({
     return {
       audioUrl,
       audioDuration,
+      screenRecordingUrl,
+      cameraRecordingUrl,
       screenshots: screenshotsRef.current,
     };
   }, [sessionId, takeScreenshots]);

@@ -43,9 +43,14 @@ export async function POST(req: Request) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    const defaultContentType = type === "recording"
-      ? (file.type?.includes("mp4") ? "audio/mp4" : "audio/webm")
-      : "image/jpeg";
+    const defaultContentType =
+      type === "screenshot"
+        ? "image/jpeg"
+        : file.type?.startsWith("video/")
+          ? file.type
+          : file.type?.includes("mp4")
+            ? "audio/mp4"
+            : "audio/webm";
 
     const { error: uploadError } = await supabaseAdmin.storage
       .from(bucket)
