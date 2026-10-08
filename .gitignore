@@ -41,3 +41,5 @@ test-results/
 # Misc
 *.pem
 .vercel
+README.md
+README.zh-CN.md
