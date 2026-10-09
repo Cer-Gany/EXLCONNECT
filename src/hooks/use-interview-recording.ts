@@ -598,11 +598,19 @@ export function useInterviewRecording({
             method: "POST",
             body: form,
           });
-          if (res.ok) {
-            const data = await res.json();
-            audioUrl = data.url;
-            log.info("Audio uploaded:", audioUrl);
-          }
+        
+        if (res.ok) {
+          const data = await res.json();
+          audioUrl = data.url;
+          log.info("Audio uploaded:", audioUrl);
+        } else {
+          const errorText = await res.text();
+          log.error(
+            `Audio recording upload failed (HTTP ${res.status}):`,
+            errorText,
+          );
+        }
+
         } catch (err) {
           log.error("Audio upload failed:", err);
         }
