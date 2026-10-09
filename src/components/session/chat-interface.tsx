@@ -41,7 +41,7 @@ import {
     X
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Message {
   id: string;
@@ -131,17 +131,48 @@ export function ChatInterface({
     initialMessages?.filter((m) => m.role === "USER").length ?? 0,
   );
 
+  // Sum up all question time limits as the minimum baseline interview duration
+  const totalQuestionsTimeLimitSeconds = useMemo(() => {
+    if (!interview.questions || interview.questions.length === 0) return 0;
+    return interview.questions.reduce((sum, q) => {
+      const qSeconds =
+        q.timeLimitSeconds && q.timeLimitSeconds > 0
+          ? q.timeLimitSeconds
+          : q.type === "CODING"
+            ? 300
+            : q.type === "WHITEBOARD"
+              ? 300
+              : 90;
+      return sum + qSeconds;
+    }, 0);
+  }, [interview.questions]);
+
   useEffect(() => {
-    if (timerStartedRef.current || !durationMinutes) return;
+    if (timerStartedRef.current) return;
     const userMessageCount = messages.filter((m) => m.role === "USER").length;
     if (userMessageCount > initialUserMessageCount.current) {
       timerStartedRef.current = true;
-      setRemainingSeconds(durationMinutes * 60);
+      const baseConfiguredSeconds = (durationMinutes ?? 0) * 60;
+      const calculatedTotalSeconds = Math.max(
+        baseConfiguredSeconds,
+        totalQuestionsTimeLimitSeconds,
+      );
+      if (calculatedTotalSeconds > 0) {
+        setRemainingSeconds(calculatedTotalSeconds);
+      }
     }
-  }, [messages, durationMinutes]);
+  }, [messages, durationMinutes, totalQuestionsTimeLimitSeconds]);
 
+  // Overall timer ticks down only when candidate has the floor (pauses while AI is typing or sending)
   useEffect(() => {
-    if (remainingSeconds === null || remainingSeconds <= 0) return;
+    if (
+      remainingSeconds === null ||
+      remainingSeconds <= 0 ||
+      aiTyping ||
+      sending
+    ) {
+      return;
+    }
     const id = setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev === null) return null;
@@ -149,7 +180,7 @@ export function ChatInterface({
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [remainingSeconds]);
+  }, [remainingSeconds, aiTyping, sending]);
 
   // ── Per-question countdown timer ───────────────────────────────
   const [questionRemainingSeconds, setQuestionRemainingSeconds] =
@@ -979,7 +1010,21 @@ export function ChatInterface({
 
   // ── Auto-end when timer expires ──────────────────────────────────
   useEffect(() => {
-    if (remainingSeconds !== 0 || timerExpiredRef.current) return;
+    if (
+      remainingSeconds !== 0 ||
+      timerExpiredRef.current ||
+      aiTyping ||
+      sending
+    ) {
+      return;
+    }
+
+    // Graceful completion: if candidate has active time left on their current question,
+    // allow them to finish the question rather than cutting them off mid-sentence
+    if (questionRemainingSeconds !== null && questionRemainingSeconds > 0) {
+      return;
+    }
+
     timerExpiredRef.current = true;
 
     (async () => {
@@ -991,7 +1036,16 @@ export function ChatInterface({
       });
       onComplete("INTERVIEW_TIME_LIMIT_REACHED");
     })();
-  }, [remainingSeconds, saveAllDrawings, saveAllCodeSnippets, sessionId, onComplete]);
+  }, [
+    remainingSeconds,
+    questionRemainingSeconds,
+    aiTyping,
+    sending,
+    saveAllDrawings,
+    saveAllCodeSnippets,
+    sessionId,
+    onComplete,
+  ]);
 
   const handleFinishInterview = useCallback(async () => {
     if (preview || finishing) return;
