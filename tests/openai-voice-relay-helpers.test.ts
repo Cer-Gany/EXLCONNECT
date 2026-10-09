@@ -168,13 +168,15 @@ test("the budget notice names the question and tells the model to transition", (
   const en = followUpLimitNotice(3, 2, false);
   assert.match(en, /question 3/);
   assert.match(en, /at most 2 follow-ups per question/);
-  assert.match(en, /signal_question_change/);
+  assert.match(en, /click 'Next Question'/);
+  assert.doesNotMatch(en, /signal_question_change/);
   assert.match(en, /Do not ask another follow-up/);
 
   assert.match(followUpLimitNotice(1, 1, false), /at most 1 follow-up per/);
 
   const zh = followUpLimitNotice(3, 2, true);
   assert.match(zh, /第3题/);
-  assert.match(zh, /signal_question_change/);
+  assert.match(zh, /下一题/);
+  assert.doesNotMatch(zh, /signal_question_change/);
   assert.match(zh, /不要再追问/);
 });
