@@ -81,10 +81,10 @@ export function followUpLimitNotice(
   isZh: boolean,
 ): string {
   if (isZh) {
-    return `[SYSTEM] 第${questionNumber}题的追问次数已用完（本次面试每题最多${followUpBudget}次追问）。受访者下次回答后，简短承接一句，然后调用 signal_question_change 进入下一题。不要再追问这道题。`;
+    return `[SYSTEM] 第${questionNumber}题的追问次数已用完（本次面试每题最多${followUpBudget}次追问）。受访者下次回答后，简短认可承接一句，并明确告知受访者："这道题就到这里，准备好后请点击下方的'下一题'按钮继续"。绝对不要自己念出下一题的内容，也不要再追问这道题。`;
   }
   const plural = followUpBudget === 1 ? "" : "s";
-  return `[SYSTEM] The follow-up budget for question ${questionNumber} is used up (this interview allows at most ${followUpBudget} follow-up${plural} per question). After the participant's next answer, briefly acknowledge it and call signal_question_change to move on. Do not ask another follow-up on this question.`;
+  return `[SYSTEM] The follow-up budget for question ${questionNumber} is used up (this interview allows at most ${followUpBudget} follow-up${plural} per question). After the participant's next answer, briefly acknowledge it and tell them: "Whenever you're ready, please click 'Next Question' (or use the button below) to proceed." Do NOT ask another follow-up, and do NOT recite or preview the next question yourself.`;
 }
 
 export interface TtsBargeInDecision {

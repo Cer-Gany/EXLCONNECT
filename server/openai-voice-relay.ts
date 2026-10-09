@@ -253,6 +253,19 @@ function resample16to24(input: Buffer): Buffer {
 
 // ── System prompt builder ───────────────────────────────────────────
 
+function formatQuestionForPrompt(q: InterviewContext["questions"][0], index: number, total: number): string {
+  let entry = `Question ${index + 1} of ${total}: [${q.type}] ${q.text}`;
+  if (q.description) entry += `\nContext: ${q.description}`;
+  if (q.options?.options?.length) {
+    const labels = q.options.options.map((o, j) => `${String.fromCharCode(65 + j)}) ${o}`).join(", ");
+    const multi = q.options.allowMultiple ? " (multiple choice)" : " (single choice)";
+    entry += `\nOptions${multi}: ${labels}`;
+  }
+  if (q.type === "CODING") entry += `\nNote: The participant has a code editor. You cannot see their code unless they describe it.`;
+  if (q.type === "WHITEBOARD") entry += `\nNote: The participant has a whiteboard. You will receive image updates silently — do NOT speak when you receive them. Only describe what you see when the participant asks you to look at it.`;
+  return entry;
+}
+
 function buildSystemPrompt(ctx: InterviewContext, startIdx: number): string {
   const isZh = isChineseInterview(ctx);
   const sorted = ctx.questions.sort((a, b) => a.order - b.order);
@@ -263,18 +276,8 @@ function buildSystemPrompt(ctx: InterviewContext, startIdx: number): string {
     isZh,
   );
 
-  const questionList = sorted.map((q, i) => {
-    let entry = `  ${i + 1}. [${q.type}] ${q.text}`;
-    if (q.description) entry += `\n     Context: ${q.description}`;
-    if (q.options?.options?.length) {
-      const labels = q.options.options.map((o, j) => `${String.fromCharCode(65 + j)}) ${o}`).join(", ");
-      const multi = q.options.allowMultiple ? " (multiple choice)" : " (single choice)";
-      entry += `\n     Options${multi}: ${labels}`;
-    }
-    if (q.type === "CODING") entry += `\n     Note: The participant has a code editor. You cannot see their code unless they describe it.`;
-    if (q.type === "WHITEBOARD") entry += `\n     Note: The participant has a whiteboard. You will receive image updates silently — do NOT speak when you receive them. Only describe what you see when the participant asks you to look at it.`;
-    return entry;
-  }).join("\n");
+  const currentQObj = sorted[startIdx];
+  const currentQuestionText = currentQObj ? formatQuestionForPrompt(currentQObj, startIdx, sorted.length) : "";
 
   const currentQ = startIdx + 1;
 
@@ -284,22 +287,26 @@ function buildSystemPrompt(ctx: InterviewContext, startIdx: number): string {
 ## 面试信息
 - 主题: "${ctx.title}"
 ${ctx.objective ? `- 目标: ${ctx.objective}` : ""}
-- 问题数量: ${sorted.length}
-- 当前问题: 第${currentQ}个
+- 问题总数: ${sorted.length}
+- 当前题目: 第${currentQ}个
 - 每题追问深度: ${depthSummary}
 
-## 问题列表
-${questionList}
+## 当前问题
+${currentQuestionText}
 
 ## 你的行为准则
 1. 从第${currentQ}个问题开始。先用温暖友好的方式自我介绍（提到你的名字、面试主题和问题数量）。然后说一句过渡语，比如"我们开始吧，这是第一个问题。"之后再提出问题。问候、过渡语和问题必须是三个独立的句子，不要合并。
 2. ${depthRule}
-3. 当一个问题讨论充分后，调用 signal_question_change 函数来进入下一个问题。"讨论充分"是指受访者给出了详细、具体的回答——不是模糊的表述如"我遇到过很多挑战"。如果回答模糊，应追问以获取更多细节。
-4. 切换后，自然地过渡到新问题。通常先用一句简短的认可或感谢来承接上一段回答，再进入下一题，而不是直接生硬地抛出问题。
-5. 所有问题结束后，调用 signal_question_change 并设 questionIndex 为 ${sorted.length}（超出范围），然后做简短总结告别。
-6. 保持对话自然流畅，回复简洁（1-3句话）。语速要平缓，略慢于日常对话，让受访者能轻松跟上。可以使用简短友好的衔接语，比如"谢谢你的分享"、"我明白了"、"这很有帮助"。
-7. 如果受访者要求"跳过"或"下一题"，简短回应后立即调用 signal_question_change 并设 userRequested=true。
-8. 如果受访者要求"上一题"，调用 signal_question_change 并设 questionIndex 为上一题的索引，设 userRequested=true。
+3. 严格专注当前问题！在当前题目下，你所提出的所有疑问都必须是针对当前题目的追问或提示。绝对不要在受访者尚未切换题目时主动念出下一题的内容。
+4. 当当前问题讨论充分后（受访者给出了详细解答或编程完成，或追问次数用完）：
+   - 简短总结认可回答（例如："谢谢你的回答，这道题的讨论就到这里。"）。
+   - 明确告知受访者："准备好后，请点击下方的'下一题'按钮（或说'下一题'）继续。"
+   - 然后停止说话，等待受访者操作。绝对不要在这一轮发言中念出或剧透下一道题的内容！
+5. 当受访者点击"下一题"或说出"下一题"后，系统会先在受访者屏幕上渲染新题及代码编辑器/白板，并向你发送 [SYSTEM] 提示。只有收到系统的切换提示后，你才开始介绍并朗读新问题。
+6. 所有问题结束后，调用 signal_question_change 并设 questionIndex 为 ${sorted.length}（超出范围），然后做简短总结告别。
+7. 保持对话自然流畅，回复简洁（1-3句话）。语速要平缓，略慢于日常对话，让受访者能轻松跟上。可以使用简短友好的衔接语，比如"谢谢你的分享"、"我明白了"、"这很有帮助"。
+8. 如果受访者口头明确要求"跳过"或"下一题"，简短回应后立即调用 signal_question_change 并设 userRequested=true。
+9. 如果受访者口头明确要求"上一题"，调用 signal_question_change 并设 questionIndex 为上一题的索引，设 userRequested=true。
 
 ## 选择题的特殊规则
 当提问单选题或多选题时，你必须把所有选项（A、B、C等）逐一朗读出来作为问题的一部分。受访者只能听到你说话——如果你不说出选项，他们就无法知道有哪些选择。列出选项后，请受访者选择并解释理由。对于多选题，提醒他们可以选择多个选项。
@@ -310,10 +317,10 @@ ${questionList}
 - 回复要保持简短，让受访者专注于思考和编码/绘画。
 - 受访者的发言分为以下几类，请对应回复：
   1. 向你提问或对话 → 正常回应
-  2. 说"完成了"/"做好了" → 请他们解释思路、复杂度和可能的优化
+  2. 说"完成了"/"做好了" → 请他们简短解释思路、复杂度；讨论充分后，邀请他们点击"下一题"按钮继续
   3. 自言自语或思考中 → 只用非常简短的鼓励（如"好的，继续"）
-  4. 明确要跳过/放弃 → 简短鼓励后调用 signal_question_change
-  5. 讨论已自然结束 → 简短感谢后调用 signal_question_change
+  4. 明确要跳过/放弃 → 简短鼓励后调用 signal_question_change 并设 userRequested=true
+  5. 讨论已自然结束 → 简短感谢，告知受访者点击"下一题"按钮进入下一道题
 
 ## 语言要求
 - 你必须始终用中文进行面试。你必须用中文回答。不要使用其他语言。
@@ -324,7 +331,7 @@ ${questionList}
 - 不要在收到更新时主动开口——只在受访者和你说话时才提及。
 
 ## 重要规则
-- 必须通过 signal_question_change 函数来切换问题。不要只口头说"让我们进入下一题"而不调用函数。
+- 绝对不要自动念出下一题！每道题讨论完毕后，引导受访者点击"下一题"按钮，等屏幕渲染新题后由系统通知你再介绍新题。
 - 如果受访者只是简单打招呼、确认性问题或模糊回答（如"你好"、"能听到吗?"、"我遇到过很多挑战"），先友好回应，再继续当前问题；不要调用 signal_question_change。这些不是实质性回答。必须等受访者给出详细、具体的回答后再切换。如果回答太简短或模糊，应追问以获取更多信息。
 - 始终关注当前问题，不要跳到其他话题。
 - 对于选择题，确保受访者给出选择并解释理由。
@@ -340,18 +347,22 @@ ${ctx.objective ? `- Objective: ${ctx.objective}` : ""}
 - Starting at: Question ${currentQ}
 - Follow-up depth: ${depthSummary}
 
-## Questions
-${questionList}
+## Current Question
+${currentQuestionText}
 
 ## Your Behavior
 1. Start at question ${currentQ}. First, give a warm greeting — introduce yourself by name, mention the topic "${ctx.title}" and that there are ${sorted.length} questions. Then say a transition phrase like "Let's get started. Here is the first question." ONLY AFTER that, ask the question. The greeting, the transition phrase, and the question MUST be three separate sentences — NEVER combine them into one.
 2. ${depthRule}
-3. When a question is sufficiently discussed, call the signal_question_change function to move forward. "Sufficiently discussed" means the participant has given a detailed, specific answer — NOT a vague statement like "I had many challenges" or "that's a good question." If their answer is vague, ask them to elaborate before moving on.
-4. After transitioning, naturally introduce the next question. Usually start with a short acknowledgement or appreciation of the participant's last answer before asking the next question.
-5. After all questions are done, call signal_question_change with questionIndex=${sorted.length} (out of bounds), then give a brief wrap-up and farewell.
-6. Keep responses concise (1-3 sentences) and conversational. Speak at a calm, unhurried pace — slightly slower than normal conversation speed so the participant can follow easily. Use brief friendly bridges like "Thanks for sharing that", "I appreciate the context", or "That makes sense" when appropriate.
-7. If the participant asks to "skip" or "next question", briefly acknowledge and immediately call signal_question_change with userRequested=true.
-8. If the participant asks for "previous question", call signal_question_change with the previous question's index and userRequested=true.
+3. Stay strictly focused on the CURRENT question! Any questions or probes you ask are follow-up questions or hints on the current problem. NEVER recite, ask, or preview the next question while the candidate is still on this question.
+4. When the current question is sufficiently discussed (or the candidate finishes coding / answering, or follow-up limit is reached):
+   - Give a brief, encouraging acknowledgement (e.g., "Thank you, that covers this question." or "Great job on this problem.").
+   - Explicitly invite the candidate to proceed: "Whenever you're ready, please click 'Next Question' (or use the button below) to move to the next problem."
+   - Then STOP speaking and wait for the candidate. Do NOT ask, preview, or recite the next question in that turn!
+5. When the candidate clicks "Next Question" (or says "next question"), the UI will update FIRST to render the new problem, constraints, and code editor on their screen. The system will then send you a [SYSTEM] prompt telling you the new question is rendered. ONLY AFTER you receive that system prompt should you introduce the new question.
+6. After all questions are done, call signal_question_change with questionIndex=${sorted.length} (out of bounds), then give a brief wrap-up and farewell.
+7. Keep responses concise (1-3 sentences) and conversational. Speak at a calm, unhurried pace — slightly slower than normal conversation speed so the participant can follow easily. Use brief friendly bridges like "Thanks for sharing that", "I appreciate the context", or "That makes sense" when appropriate.
+8. If the participant verbally asks to "skip" or "next question", briefly acknowledge and immediately call signal_question_change with userRequested=true.
+9. If the participant verbally asks for "previous question", call signal_question_change with the previous question's index and userRequested=true.
 
 ## Special Rules for Choice Questions
 When asking a SINGLE_CHOICE or MULTIPLE_CHOICE question, you MUST read out ALL the answer options (A, B, C, etc.) as part of asking the question. The participant can only hear you — they cannot see the options unless you say them. After listing the options, ask the participant to choose and explain their reasoning. For multiple-choice questions, remind them they can select more than one option.
@@ -362,10 +373,10 @@ When transitioning to a CODING or WHITEBOARD question:
 - Keep your responses short — let the participant focus on thinking and coding/drawing.
 - Categorize the participant's speech and respond accordingly:
   1. Talking TO YOU (asking questions, discussing approach) → Respond naturally
-  2. Saying they're DONE ("I'm done", "finished") → Ask about their approach, time/space complexity, and possible improvements
+  2. Saying they're DONE ("I'm done", "finished") → Ask about their approach, time/space complexity, and possible improvements. When discussion concludes, tell them: "Whenever you're ready, please click 'Next Question' to continue."
   3. Thinking ALOUD (self-talk, "hmm", reading code) → Brief encouragement only (e.g. "Take your time")
-  4. Wanting to SKIP ("I can't do this", "skip", "next question") → Brief encouragement, then call signal_question_change
-  5. Discussion naturally CONCLUDED → Brief acknowledgement, then call signal_question_change
+  4. Wanting to SKIP ("I can't do this", "skip", "next question") → Brief encouragement, then call signal_question_change with userRequested=true
+  5. Discussion naturally CONCLUDED → Brief acknowledgement, then tell the candidate: "Whenever you're ready, please click 'Next Question' to proceed."
 
 ## Language Requirements
 - YOU MUST ALWAYS RESPOND IN ENGLISH. You must conduct this interview entirely in English. Do not switch to any other language under any circumstance.
@@ -376,8 +387,9 @@ When transitioning to a CODING or WHITEBOARD question:
 - Do NOT proactively speak when you receive an update — only reference the content when the participant addresses you.
 
 ## Important Rules
-- You MUST use the signal_question_change function to transition between questions. NEVER verbally say "let's move on" without also calling the function — the UI only updates when the function is called.
-- Do NOT call signal_question_change if the participant has only said a brief greeting, clarifying remark, or vague statement (e.g. "hi", "can you hear me?", "I had many challenges"). First respond warmly and helpfully, then continue the current question. These are NOT substantive answers. You MUST wait for a detailed, specific response that actually addresses the question before moving on. If their answer is too brief or vague, probe deeper.
+- NEVER recite the next question on your own while still on the current question! Always conclude the current question and invite the participant to click "Next Question".
+- Do NOT call signal_question_change unless the participant explicitly requested it (userRequested=true) or all questions are finished.
+- If the participant has only said a brief greeting, clarifying remark, or vague statement, first respond warmly and helpfully, then continue the current question. These are NOT substantive answers.
 - Stay focused on the current question. Do not jump to unrelated topics.
 - For choice questions, ensure the participant both selects an option AND explains their reasoning.
 - When the participant asks you to look at the whiteboard, describe what you see and give feedback. Do NOT automatically start speaking when you receive a whiteboard image update — wait for the participant to address you.`;
@@ -1621,11 +1633,22 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
                 break;
               }
 
+              // Reject autonomous forward transitions: candidate must click Next Question or ask to advance
+              const isForward = newIdx > currentQuestionIndex && newIdx < sortedQuestions.length;
+              if (isForward && !userRequested) {
+                log.info(`Blocked autonomous forward transition: instructing AI to tell candidate to click Next Question`);
+                pendingFunctionCalls.push({
+                  callId: msg.call_id,
+                  name: msg.name,
+                  args: `Do not transition to the next question automatically. The candidate must click 'Next Question' (or say 'next question') so the new question and code editor can render on their screen first. Please conclude your comments on question ${currentQuestionIndex + 1} and invite the candidate: "Whenever you're ready, please click 'Next Question' to proceed." Do NOT recite the next question yourself.`,
+                });
+                break;
+              }
+
               // Reject premature transitions: block if the user hasn't spoken,
               // not enough time has passed, or insufficient words (forward only).
               // Backward transitions and explicit user requests bypass the word count guard.
               const dwellMs = Date.now() - questionEnteredAt;
-              const isForward = newIdx > currentQuestionIndex && newIdx < sortedQuestions.length;
               const needsWordGuard = isForward && !userRequested;
               if (newIdx < sortedQuestions.length && (lastUserInput === 0 || dwellMs < MIN_QUESTION_DWELL_MS || (needsWordGuard && userCommittedWordsThisQuestion < MIN_WORDS_BEFORE_TRANSITION))) {
                 const reason = lastUserInput === 0
@@ -2093,9 +2116,11 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
       isTransitioning = false;
       log.info(`${dir} Q${currentQuestionIndex + 1}/${sortedQuestions.length}`);
 
+      const nextQ = sortedQuestions[currentQuestionIndex];
+      const nextQDetails = nextQ ? formatQuestionForPrompt(nextQ, currentQuestionIndex, sortedQuestions.length) : "";
       const prompt = reason === "user_request"
-        ? `[SYSTEM] The participant explicitly asked to go ${directionLabel.toLowerCase()}. We are now on question ${currentQuestionIndex + 1}: "${sortedQuestions[currentQuestionIndex]?.text}". Briefly acknowledge the transition and introduce this question now.`
-        : `[SYSTEM] The participant clicked "${directionLabel}". We are now on question ${currentQuestionIndex + 1}: "${sortedQuestions[currentQuestionIndex]?.text}". Briefly introduce this question now.`;
+        ? `[SYSTEM] The participant explicitly navigated to ${directionLabel.toLowerCase()}. The new question is now rendered on their screen:\n${nextQDetails}\nBriefly introduce and ask this question now.`
+        : `[SYSTEM] The participant clicked "${directionLabel}". The new question is now rendered on their screen:\n${nextQDetails}\nBriefly introduce and ask this question now.`;
       sendQuestionPrompt(prompt);
     }, 500);
   }

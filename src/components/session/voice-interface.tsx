@@ -1928,6 +1928,25 @@ export function VoiceInterface({
               )}
             </div>
           )}
+          {voice.isConnected && voice.currentQuestionIndex < voice.totalQuestions - 1 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleNextQuestion}
+              disabled={voice.isTransitioning}
+              className="h-6 gap-1 px-2.5 text-xs font-medium text-primary border-primary/25 hover:bg-primary hover:text-primary-foreground shrink-0 transition-colors"
+              title="Move to the next question"
+            >
+              {voice.isTransitioning && voice.transitionDirection !== "previous" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>
+                  <span>Next Question</span>
+                  <ChevronRight className="h-3 w-3" />
+                </>
+              )}
+            </Button>
+          )}
         </div>
         {/* Current question text */}
         {voice.isConnected && currentQuestionText && (
