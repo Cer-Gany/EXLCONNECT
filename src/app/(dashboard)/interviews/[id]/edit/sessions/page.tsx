@@ -1,5 +1,6 @@
 "use client";
 
+// Sessions tab page
 import { InterviewResults } from "@/components/interview/interview-results";
 import { CandidateManager } from "@/components/interview/candidate-manager";
 import { useSearchParams } from "next/navigation";

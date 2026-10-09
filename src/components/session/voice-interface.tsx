@@ -461,6 +461,11 @@ export function VoiceInterface({
     useState<number | null>(null);
   const questionTimerExpiredRef = useRef(false);
 
+  // Gating for question timer: wait until the AI completes reciting the question
+  const [isQuestionRecited, setIsQuestionRecited] = useState(false);
+  const hasSpeakingStartedForQRef = useRef(false);
+  const currentQIndexForRecitationRef = useRef<number | null>(null);
+
   // ── Multiple drawings state ───────────────────────────────────
   interface Drawing {
     id: string;
@@ -784,13 +789,69 @@ export function VoiceInterface({
     return () => clearInterval(id);
   }, [remainingSeconds]);
 
+  // Reset recitation tracking when current question index changes
+  useEffect(() => {
+    if (currentQIndexForRecitationRef.current !== voice.currentQuestionIndex) {
+      currentQIndexForRecitationRef.current = voice.currentQuestionIndex;
+      setIsQuestionRecited(false);
+      hasSpeakingStartedForQRef.current = false;
+    }
+  }, [voice.currentQuestionIndex]);
+
+  // Track AI question recitation:
+  // Starts when voice.isSpeaking becomes true, finishes when voice.isSpeaking turns false
+  useEffect(() => {
+    if (preview || !voice.isConnected || isQuestionRecited) return;
+
+    if (voice.isSpeaking) {
+      hasSpeakingStartedForQRef.current = true;
+    } else if (
+      hasSpeakingStartedForQRef.current &&
+      !voice.isSpeaking &&
+      !voice.isProcessing &&
+      !voice.isTransitioning
+    ) {
+      setIsQuestionRecited(true);
+    }
+  }, [
+    voice.isSpeaking,
+    voice.isProcessing,
+    voice.isTransitioning,
+    isQuestionRecited,
+    voice.isConnected,
+    preview,
+  ]);
+
+  // Safety fallback: if 15s pass without recitation finishing, or candidate speaks, unlock timer
+  useEffect(() => {
+    if (preview || !voice.isConnected || isQuestionRecited) return;
+
+    const fallbackTimer = setTimeout(() => {
+      setIsQuestionRecited(true);
+    }, 15000);
+
+    return () => clearTimeout(fallbackTimer);
+  }, [voice.currentQuestionIndex, isQuestionRecited, voice.isConnected, preview]);
+
+  // Candidate speech detected (transcript arrived or barge-in) unlocks immediately
+  useEffect(() => {
+    if (voice.userTranscript.trim() && !isQuestionRecited) {
+      setIsQuestionRecited(true);
+    }
+  }, [voice.userTranscript, isQuestionRecited]);
+
   // Per-question countdown tick.
+  // ONLY runs after the AI finishes reciting the question, and pauses whenever the AI is speaking.
   useEffect(() => {
     if (
       preview ||
       !voice.isConnected ||
       questionRemainingSeconds === null ||
-      questionRemainingSeconds <= 0
+      questionRemainingSeconds <= 0 ||
+      !isQuestionRecited ||
+      voice.isSpeaking ||
+      voice.isProcessing ||
+      voice.isTransitioning
     ) {
       return;
     }
@@ -803,7 +864,15 @@ export function VoiceInterface({
     }, 1000);
 
     return () => clearInterval(id);
-  }, [questionRemainingSeconds, voice.isConnected, preview]);
+  }, [
+    questionRemainingSeconds,
+    voice.isConnected,
+    preview,
+    isQuestionRecited,
+    voice.isSpeaking,
+    voice.isProcessing,
+    voice.isTransitioning,
+  ]);
 
   // ── Whiteboard persistence ──────────────────────────────────────
   /** Persist a single drawing to the backend. */
@@ -1214,7 +1283,11 @@ export function VoiceInterface({
       questionRemainingSeconds !== 0 ||
       questionTimerExpiredRef.current ||
       !voice.isConnected ||
-      voice.currentQuestionIndex < 0
+      voice.currentQuestionIndex < 0 ||
+      !isQuestionRecited ||
+      voice.isSpeaking ||
+      voice.isProcessing ||
+      voice.isTransitioning
     ) {
       return;
     }
@@ -1235,6 +1308,10 @@ export function VoiceInterface({
     voice.isConnected,
     voice.currentQuestionIndex,
     voice.totalQuestions,
+    isQuestionRecited,
+    voice.isSpeaking,
+    voice.isProcessing,
+    voice.isTransitioning,
     handleNextQuestion,
   ]);
 
@@ -1759,13 +1836,33 @@ export function VoiceInterface({
             </div>
           )}
           {questionRemainingSeconds !== null && (
-            <div className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${
-              questionRemainingSeconds <= 10
-                ? "bg-destructive/10 text-destructive"
-                : "bg-primary/10 text-primary"
-            }`}>
-              <Clock className="h-3 w-3" />
-              <span>Q Timer: {formatTime(questionRemainingSeconds)}</span>
+            <div
+              className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${
+                !isQuestionRecited
+                  ? "bg-muted text-muted-foreground"
+                  : voice.isSpeaking || voice.isProcessing
+                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                    : questionRemainingSeconds <= 10
+                      ? "bg-destructive/10 text-destructive animate-pulse"
+                      : "bg-primary/10 text-primary"
+              }`}
+            >
+              {!isQuestionRecited ? (
+                <>
+                  <Volume2 className="h-3 w-3 animate-pulse text-primary" />
+                  <span>AI reading... {formatTime(questionRemainingSeconds)}</span>
+                </>
+              ) : voice.isSpeaking || voice.isProcessing ? (
+                <>
+                  <Volume2 className="h-3 w-3 text-amber-500" />
+                  <span>Paused · {formatTime(questionRemainingSeconds)}</span>
+                </>
+              ) : (
+                <>
+                  <Clock className="h-3 w-3" />
+                  <span>Q Timer: {formatTime(questionRemainingSeconds)}</span>
+                </>
+              )}
             </div>
           )}
         </div>

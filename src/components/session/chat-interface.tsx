@@ -180,8 +180,15 @@ export function ChatInterface({
   }, [currentQuestion, currentQuestionTimeLimit, preview]);
 
   useEffect(() => {
-    if (preview || questionRemainingSeconds === null) return;
-    if (questionRemainingSeconds <= 0) return;
+    if (
+      preview ||
+      questionRemainingSeconds === null ||
+      questionRemainingSeconds <= 0 ||
+      aiTyping ||
+      sending
+    ) {
+      return;
+    }
 
     const id = setInterval(() => {
       setQuestionRemainingSeconds((prev) => {
@@ -191,7 +198,7 @@ export function ChatInterface({
     }, 1000);
 
     return () => clearInterval(id);
-  }, [questionRemainingSeconds, preview]);
+  }, [questionRemainingSeconds, aiTyping, sending, preview]);
 
   // ── Auto-advance when per-question timer expires ───────────────
   useEffect(() => {
@@ -1285,7 +1292,10 @@ export function ChatInterface({
             )}
           >
             <Clock className="h-3.5 w-3.5" />
-            <span>Question: {formatTime(questionRemainingSeconds)}</span>
+            <span>
+              Question: {formatTime(questionRemainingSeconds)}
+              {aiTyping && " (AI typing...)"}
+            </span>
           </div>
         )}
 
@@ -1330,7 +1340,10 @@ export function ChatInterface({
                 )}
               >
                 <Clock className="h-3.5 w-3.5" />
-                <span>Q: {formatTime(questionRemainingSeconds)}</span>
+                <span>
+                  Q: {formatTime(questionRemainingSeconds)}
+                  {aiTyping && " (typing...)"}
+                </span>
               </div>
             )}
 
