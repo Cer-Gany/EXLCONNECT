@@ -771,51 +771,15 @@ export function VoiceInterface({
     }
   }, [videoMode, voice.isListening]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sum up all question time limits as the minimum baseline interview duration
-  const totalQuestionsTimeLimitSeconds = useMemo(() => {
-    if (!interviewContext.questions || interviewContext.questions.length === 0) return 0;
-    return interviewContext.questions.reduce((sum, q) => {
-      const qSeconds =
-        q.timeLimitSeconds && q.timeLimitSeconds > 0
-          ? q.timeLimitSeconds
-          : q.type === "CODING"
-            ? 300
-            : q.type === "WHITEBOARD"
-              ? 300
-              : 90;
-      return sum + qSeconds;
-    }, 0);
-  }, [interviewContext.questions]);
-
-  // ── Overall countdown timer (starts when voice connects) ────────
+  // ── Countdown timer (starts when voice connects) ────────────────
   useEffect(() => {
-    if (!voice.isConnected || timerStartedRef.current) return;
+    if (!voice.isConnected || timerStartedRef.current || !durationMinutes) return;
     timerStartedRef.current = true;
+    setRemainingSeconds(durationMinutes * 60);
+  }, [voice.isConnected, durationMinutes]);
 
-    const baseConfiguredSeconds = (durationMinutes ?? 0) * 60;
-    const calculatedTotalSeconds = Math.max(
-      baseConfiguredSeconds,
-      totalQuestionsTimeLimitSeconds,
-    );
-
-    if (calculatedTotalSeconds > 0) {
-      setRemainingSeconds(calculatedTotalSeconds);
-    }
-  }, [voice.isConnected, durationMinutes, totalQuestionsTimeLimitSeconds]);
-
-  // Overall timer ticks down only when candidate has the floor
-  // (pauses while AI is reciting, speaking, or processing)
   useEffect(() => {
-    if (
-      remainingSeconds === null ||
-      remainingSeconds <= 0 ||
-      !isQuestionRecited ||
-      voice.isSpeaking ||
-      voice.isProcessing ||
-      voice.isTransitioning
-    ) {
-      return;
-    }
+    if (remainingSeconds === null || remainingSeconds <= 0) return;
     const id = setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev === null) return null;
@@ -823,13 +787,7 @@ export function VoiceInterface({
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [
-    remainingSeconds,
-    isQuestionRecited,
-    voice.isSpeaking,
-    voice.isProcessing,
-    voice.isTransitioning,
-  ]);
+  }, [remainingSeconds]);
 
   // Reset recitation tracking when current question index changes
   useEffect(() => {
@@ -1509,33 +1467,12 @@ export function VoiceInterface({
     handleEndInterviewRef.current = handleEndInterview;
   }, [handleEndInterview]);
 
-  // ── Auto-end when overall timer expires ──────────────────────────
+  // ── Auto-end when timer expires ──────────────────────────────────
   useEffect(() => {
-    if (
-      remainingSeconds !== 0 ||
-      timerExpiredRef.current ||
-      voice.isSpeaking ||
-      voice.isProcessing ||
-      voice.isTransitioning
-    ) {
-      return;
-    }
-
-    // Graceful completion: if candidate has active time left on their current question,
-    // allow them to finish the question rather than cutting them off mid-sentence
-    if (questionRemainingSeconds !== null && questionRemainingSeconds > 0) {
-      return;
-    }
-
+    if (remainingSeconds !== 0 || timerExpiredRef.current) return;
     timerExpiredRef.current = true;
     handleEndInterviewRef.current("INTERVIEW_TIME_LIMIT_REACHED");
-  }, [
-    remainingSeconds,
-    questionRemainingSeconds,
-    voice.isSpeaking,
-    voice.isProcessing,
-    voice.isTransitioning,
-  ]);
+  }, [remainingSeconds]);
 
   // ── Auto-end when server-side time limit is exceeded ────────────
   const timeLimitTriggeredRef = useRef(false);
