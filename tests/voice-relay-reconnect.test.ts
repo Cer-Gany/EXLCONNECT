@@ -9,7 +9,7 @@ const relayPath = path.join(
 );
 
 function readVoiceRelaySource(): string {
-  return fs.readFileSync(relayPath, "utf8");
+  return fs.readFileSync(relayPath, "utf8").replace(/\r\n/g, "\n");
 }
 
 describe("server/voice-relay.ts reconnect & lifecycle (source checks)", () => {
