@@ -164,17 +164,17 @@ test("the depth rule is unnumbered so the prompt template owns its position", ()
   }
 });
 
-test("the budget notice names the question and tells the model to transition", () => {
+test("the budget notice names the question and tells the model to wait for Next Question", () => {
   const en = followUpLimitNotice(3, 2, false);
   assert.match(en, /question 3/);
   assert.match(en, /at most 2 follow-ups per question/);
-  assert.match(en, /signal_question_change/);
-  assert.match(en, /Do not ask another follow-up/);
+  assert.match(en, /click 'Next Question'/);
+  assert.match(en, /Do NOT ask another follow-up/);
 
   assert.match(followUpLimitNotice(1, 1, false), /at most 1 follow-up per/);
 
   const zh = followUpLimitNotice(3, 2, true);
   assert.match(zh, /第3题/);
-  assert.match(zh, /signal_question_change/);
+  assert.match(zh, /点击下方的'下一题'按钮继续/);
   assert.match(zh, /不要再追问/);
 });
