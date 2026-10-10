@@ -58,6 +58,11 @@ function stopMediaRecorderSafely(
     }, timeoutMs);
 
     recorder.addEventListener("stop", finish, { once: true });
+    recorder.addEventListener("error", (event) => {
+      log.warn(`${label} recorder emitted an error while stopping`, event);
+      // MediaRecorder normally emits a final dataavailable before stop. Keep
+      // waiting for stop (or the timeout) so those final chunks are retained.
+    }, { once: true });
 
     try {
       recorder.stop();
@@ -150,6 +155,13 @@ export function useInterviewRecording({
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const stoppedRef = useRef(false);
+  const stopPromiseRef = useRef<Promise<{
+    audioUrl?: string;
+    audioDuration?: number;
+    screenRecordingUrl?: string;
+    cameraRecordingUrl?: string;
+    screenshots: ScreenshotEntry[];
+  }> | null>(null);
   const ttsPlayTimeRef = useRef(0);
   const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
 
@@ -410,6 +422,7 @@ export function useInterviewRecording({
       const timestamp = new Date().toISOString();
       const filename = `${timestamp.replace(/[:.]/g, "-")}-${type}.jpg`;
 
+      let screenshotTimeout: ReturnType<typeof setTimeout> | undefined;
       try {
         const form = new FormData();
         form.append("file", blob, filename);
@@ -417,11 +430,13 @@ export function useInterviewRecording({
         form.append("type", "screenshot");
         form.append("filename", filename);
 
+        const controller = new AbortController();
+        screenshotTimeout = setTimeout(() => controller.abort(), 15_000);
         const res = await fetch("/api/session/upload", {
           method: "POST",
           body: form,
+          signal: controller.signal,
         });
-
         if (res.ok) {
           const data = await res.json();
           screenshotsRef.current.push({
@@ -434,6 +449,8 @@ export function useInterviewRecording({
         }
       } catch (err) {
         log.error("Screenshot upload failed:", err);
+      } finally {
+        if (screenshotTimeout) clearTimeout(screenshotTimeout);
       }
     },
     [sessionId],
@@ -441,12 +458,14 @@ export function useInterviewRecording({
 
   /** Take screenshots from both camera and screen streams. */
   const takeScreenshots = useCallback(() => {
+    const pending: Promise<void>[] = [];
     if (cameraVideoRef.current && cameraStreamRef.current) {
-      captureAndUpload(cameraVideoRef.current, "camera");
+      pending.push(captureAndUpload(cameraVideoRef.current, "camera"));
     }
     if (screenVideoRef.current && screenStreamRef.current) {
-      captureAndUpload(screenVideoRef.current, "screen");
+      pending.push(captureAndUpload(screenVideoRef.current, "screen"));
     }
+    return Promise.all(pending).then(() => undefined);
   }, [captureAndUpload]);
 
   /** Start recording audio and periodic screenshots. */
@@ -485,6 +504,16 @@ export function useInterviewRecording({
       // Acquire camera + screen
       await acquireStreams();
 
+      // End Interview may have been pressed while the permission/reuse flow
+      // was pending. Do not start new recorders after finalization began.
+      if (stoppedRef.current) {
+        cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+        screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+        setCameraStream(null);
+        setScreenStream(null);
+        return;
+      }
+
       // Start continuous camera and screen video recordings.
       startCameraRecording();
       startScreenRecording();
@@ -522,7 +551,7 @@ export function useInterviewRecording({
       }, 500);
 
       // Start periodic screenshot timer
-      screenshotTimerRef.current = setInterval(takeScreenshots, screenshotIntervalMs);
+      screenshotTimerRef.current = setInterval(() => { void takeScreenshots(); }, screenshotIntervalMs);
 
       setIsRecording(true);
       log.info("Started");
@@ -550,10 +579,11 @@ export function useInterviewRecording({
     cameraRecordingUrl?: string;
     screenshots: ScreenshotEntry[];
   }> => {
-    if (stoppedRef.current) {
-      return { screenshots: screenshotsRef.current };
-    }
+    if (stopPromiseRef.current) return stopPromiseRef.current;
+    if (stoppedRef.current) return { screenshots: screenshotsRef.current };
     stoppedRef.current = true;
+
+    const finalize = async () => {
 
     // Stop screenshot timer
     if (screenshotTimerRef.current) {
@@ -561,171 +591,120 @@ export function useInterviewRecording({
       screenshotTimerRef.current = null;
     }
 
-    // Take one final set of screenshots
-    takeScreenshots();
+    // Capture metadata/screenshots before the source tracks are released.
+    await takeScreenshots();
 
     // Stop MediaRecorder and collect audio
-    let audioUrl: string | undefined;
     let audioDuration: number | undefined;
     const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      await new Promise<void>((resolve) => {
-        recorder.onstop = () => resolve();
-        recorder.stop();
-      });
+    const cameraRecorder = cameraRecorderRef.current;
+    const screenRecorder = screenRecorderRef.current;
+    // Stop every recorder before doing duration parsing or network I/O. Each
+    // stop promise resolves on stop or a bounded timeout, and stop's final
+    // dataavailable event is delivered before its stop event.
+    await Promise.all([
+      recorder ? stopMediaRecorderSafely(recorder, "Audio") : Promise.resolve(),
+      cameraRecorder ? stopMediaRecorderSafely(cameraRecorder, "Camera") : Promise.resolve(),
+      screenRecorder ? stopMediaRecorderSafely(screenRecorder, "Screen") : Promise.resolve(),
+    ]);
 
+    // Once all final dataavailable/stop events have fired, release capture
+    // devices before parsing blobs or waiting on storage.
+    try { micSourceRef.current?.disconnect(); } catch { /* already disconnected */ }
+    micSourceRef.current = null;
+    const mixContext = mixCtxRef.current;
+    mixCtxRef.current = null;
+    if (mixContext && mixContext.state !== "closed") {
+      try { await mixContext.close(); } catch (error) {
+        log.warn("Audio mixer context close failed", error);
+      }
+    }
+    mixDestRef.current = null;
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    setCameraStream(null);
+    setScreenStream(null);
+
+    const uploadRecording = async (blob: Blob, filename: string): Promise<string | undefined> => {
+      const form = new FormData();
+      form.append("file", blob, filename);
+      form.append("sessionId", sessionId);
+      form.append("type", "recording");
+      form.append("filename", filename);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 480_000);
+      const startedAt = Date.now();
+      try {
+        const response = await fetch("/api/session/upload", {
+          method: "POST",
+          body: form,
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        const data = await response.json();
+        log.info(`Uploaded ${filename} (${blob.size} bytes) in ${Date.now() - startedAt}ms`);
+        return data.url as string;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          log.error(`Upload request timed out for ${filename} (${blob.size} bytes); storage outcome may be unknown`);
+        } else {
+          log.error(`Upload failed for ${filename} (${blob.size} bytes)`, error);
+        }
+        return undefined;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    let audioBlob: Blob | undefined;
+    if (recorder) {
       const mime = audioMimeRef.current || "audio/webm";
       const isWebm = mime.includes("webm");
-      const ext = isWebm ? "webm" : "m4a";
       const rawBlob = new Blob(chunksRef.current, { type: mime });
       if (rawBlob.size > 0) {
         audioDuration = await resolveBlobDuration(rawBlob);
 
         // Patch WebM container with correct duration so players can display it
-        const audioBlob = (isWebm && audioDuration)
+        audioBlob = (isWebm && audioDuration)
           ? await fixWebmDuration(rawBlob, audioDuration * 1000)
           : rawBlob;
 
-        try {
-          const fname = `recording-${Date.now()}.${ext}`;
-          const form = new FormData();
-          form.append("file", audioBlob, fname);
-          form.append("sessionId", sessionId);
-          form.append("type", "recording");
-          form.append("filename", fname);
-
-          const res = await fetch("/api/session/upload", {
-            method: "POST",
-            body: form,
-          });
-        
-        if (res.ok) {
-          const data = await res.json();
-          audioUrl = data.url;
-          log.info("Audio uploaded:", audioUrl);
-        } else {
-          const errorText = await res.text();
-          log.error(
-            `Audio recording upload failed (HTTP ${res.status}):`,
-            errorText,
-          );
-        }
-
-        } catch (err) {
-          log.error("Audio upload failed:", err);
-        }
       }
     }
 
-    // Stop continuous camera video recording and upload the full interview video.
-    let cameraRecordingUrl: string | undefined;
-    const cameraRecorder = cameraRecorderRef.current;
-
-    if (cameraRecorder && cameraRecorder.state !== "inactive") {
-      await stopMediaRecorderSafely(cameraRecorder, "Camera");
-    }
-
+    // Build every final blob before starting independent storage requests.
+    const videoUploads: Promise<string | undefined>[] = [];
+    const cameraUploadIndex = cameraChunksRef.current.length > 0 ? videoUploads.length : -1;
     const cameraMime = cameraMimeRef.current || "video/webm";
     const cameraBlob = new Blob(cameraChunksRef.current, {
       type: cameraMime,
     });
-
-    if (cameraBlob.size > 0) {
-      try {
-        const fname = `camera-recording-${Date.now()}.webm`;
-        const form = new FormData();
-
-        form.append("file", cameraBlob, fname);
-        form.append("sessionId", sessionId);
-        form.append("type", "recording");
-        form.append("filename", fname);
-
-        const res = await fetch("/api/session/upload", {
-          method: "POST",
-          body: form,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          cameraRecordingUrl = data.url;
-          log.info("Camera recording uploaded:", cameraRecordingUrl);
-        } else {
-          log.error(
-            "Camera recording upload failed:",
-            await res.text(),
-          );
-        }
-      } catch (err) {
-        log.error("Camera recording upload failed:", err);
-      }
-    }
+    if (cameraBlob.size > 0) videoUploads.push(uploadRecording(cameraBlob, `camera-recording-${Date.now()}.webm`));
 
     cameraRecorderRef.current = null;
     cameraChunksRef.current = [];
     cameraMimeRef.current = "";
 
-    // Stop continuous screen video recording and upload the full interview video.
-    let screenRecordingUrl: string | undefined;
-    const screenRecorder = screenRecorderRef.current;
-
-    if (screenRecorder && screenRecorder.state !== "inactive") {
-      await stopMediaRecorderSafely(screenRecorder, "Screen");
-    }
-
+    const screenUploadIndex = screenChunksRef.current.length > 0 ? videoUploads.length : -1;
     const screenMime = screenMimeRef.current || "video/webm";
     const screenBlob = new Blob(screenChunksRef.current, {
       type: screenMime,
     });
 
-    if (screenBlob.size > 0) {
-      try {
-        const fname = `screen-recording-${Date.now()}.webm`;
-        const form = new FormData();
+    if (screenBlob.size > 0) videoUploads.push(uploadRecording(screenBlob, `screen-recording-${Date.now()}.webm`));
 
-        form.append("file", screenBlob, fname);
-        form.append("sessionId", sessionId);
-        form.append("type", "recording");
-        form.append("filename", fname);
-
-        const res = await fetch("/api/session/upload", {
-          method: "POST",
-          body: form,
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          screenRecordingUrl = data.url;
-          log.info("Screen recording uploaded:", screenRecordingUrl);
-        } else {
-          log.error(
-            "Screen recording upload failed:",
-            await res.text(),
-          );
-        }
-      } catch (err) {
-        log.error("Screen recording upload failed:", err);
-      }
-    }
+    let audioUpload: Promise<string | undefined> = Promise.resolve(undefined);
+    if (audioBlob?.size) audioUpload = uploadRecording(audioBlob, `recording-${Date.now()}.${audioMimeRef.current.includes("webm") ? "webm" : "m4a"}`);
+    const [audioResult, videoResults] = await Promise.all([audioUpload, Promise.all(videoUploads)]);
+    const audioUrl = audioResult;
+    const cameraRecordingUrl = cameraUploadIndex >= 0 ? videoResults[cameraUploadIndex] : undefined;
+    const screenRecordingUrl = screenUploadIndex >= 0 ? videoResults[screenUploadIndex] : undefined;
 
     screenRecorderRef.current = null;
     screenChunksRef.current = [];
     screenMimeRef.current = "";
 
-    // Disconnect mic source
-    try { micSourceRef.current?.disconnect(); } catch { /* noop */ }
-    micSourceRef.current = null;
-
-    // Close mix context
-    try { mixCtxRef.current?.close(); } catch { /* noop */ }
-    mixCtxRef.current = null;
-    mixDestRef.current = null;
     recorderRef.current = null;
-
-    // Stop camera/screen tracks
-    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
-    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-    setCameraStream(null);
-    setScreenStream(null);
 
     // Clean up hidden video elements
     if (cameraVideoRef.current) {
@@ -749,6 +728,42 @@ export function useInterviewRecording({
       cameraRecordingUrl,
       screenshots: screenshotsRef.current,
     };
+    };
+
+    stopPromiseRef.current = finalize().catch((error) => {
+      log.error("Recording finalization failed", error);
+      // Stop and release devices even if blob processing or uploads fail.
+      for (const active of [recorderRef.current, cameraRecorderRef.current, screenRecorderRef.current]) {
+        if (active && active.state !== "inactive") {
+          try { active.stop(); } catch { /* already stopping */ }
+        }
+      }
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      try { micSourceRef.current?.disconnect(); } catch { /* already disconnected */ }
+      micSourceRef.current = null;
+      const context = mixCtxRef.current;
+      mixCtxRef.current = null;
+      if (context && context.state !== "closed") {
+        void context.close().catch((closeError) => log.warn("Audio mixer context close failed", closeError));
+      }
+      mixDestRef.current = null;
+      if (screenshotTimerRef.current) clearInterval(screenshotTimerRef.current);
+      screenshotTimerRef.current = null;
+      for (const video of [cameraVideoRef.current, screenVideoRef.current]) {
+        if (video) {
+          video.srcObject = null;
+          video.remove();
+        }
+      }
+      cameraVideoRef.current = null;
+      screenVideoRef.current = null;
+      setCameraStream(null);
+      setScreenStream(null);
+      setIsRecording(false);
+      return { screenshots: screenshotsRef.current };
+    });
+    return stopPromiseRef.current;
   }, [sessionId, takeScreenshots]);
 
   // Cleanup on unmount
@@ -757,7 +772,11 @@ export function useInterviewRecording({
       if (screenshotTimerRef.current) clearInterval(screenshotTimerRef.current);
       try { recorderRef.current?.stop(); } catch { /* noop */ }
       try { micSourceRef.current?.disconnect(); } catch { /* noop */ }
-      try { mixCtxRef.current?.close(); } catch { /* noop */ }
+      const mixContext = mixCtxRef.current;
+      mixCtxRef.current = null;
+      if (mixContext && mixContext.state !== "closed") {
+        void mixContext.close().catch((error) => log.warn("Audio mixer context close failed", error));
+      }
       cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       if (cameraVideoRef.current) { cameraVideoRef.current.remove(); cameraVideoRef.current = null; }

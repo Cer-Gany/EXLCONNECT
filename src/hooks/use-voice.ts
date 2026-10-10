@@ -378,8 +378,11 @@ export function useVoice({
     interruptPlayback();
     relayConnectorRef.current?.close();
     relayConnectorRef.current = null;
-    audioContextRef.current?.close();
+    const context = audioContextRef.current;
     audioContextRef.current = null;
+    if (context && context.state !== "closed") {
+      void context.close().catch((error) => log.warn("Voice audio context close failed", error));
+    }
     dropAudioUntilQuestionChangeRef.current = false;
     setState((prev) => ({
       ...prev,
@@ -1306,10 +1309,12 @@ export function useVoice({
 
     if (processorRef.current) {
       const { processor, source, ctx } = processorRef.current;
-      processor.disconnect();
-      source.disconnect();
-      ctx.close();
       processorRef.current = null;
+      try { processor.disconnect(); } catch { /* already disconnected */ }
+      try { source.disconnect(); } catch { /* already disconnected */ }
+      if (ctx.state !== "closed") {
+        void ctx.close().catch((error: unknown) => log.warn("Microphone audio context close failed", error));
+      }
     }
 
     if (mediaStreamRef.current) {
@@ -1461,20 +1466,27 @@ export function useVoice({
   }, [sessionId]);
 
   /** Disconnect, save messages, and clean up everything */
+  const stopInteraction = useCallback(() => {
+    cleanup();
+  }, [cleanup]);
+
   const disconnect = useCallback(async () => {
     setState((s) => ({ ...s, isSaving: true }));
+    // Close the relay and microphone immediately so no new response can start
+    // while final messages are being persisted.
+    stopInteraction();
     try {
       await saveAndComplete();
     } finally {
-      cleanup();
-      // isSaving is reset by cleanup
+      setState((s) => ({ ...s, isSaving: false }));
     }
-  }, [saveAndComplete, cleanup]);
+  }, [saveAndComplete, stopInteraction]);
 
   return {
     ...state,
     connect,
     disconnect,
+    stopInteraction,
     startListening,
     stopListening,
     nextQuestion,

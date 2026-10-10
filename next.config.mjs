@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    middlewareClientMaxBodySize: "5gb",
+    proxyClientMaxBodySize: "100mb",
   },
   allowedDevOrigins: ["127.0.0.1"],
   serverExternalPackages: [

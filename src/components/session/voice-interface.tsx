@@ -756,11 +756,11 @@ export function VoiceInterface({
   // ── Start recording when voice connects (video mode) ───────────
   const recordingStartedRef = useRef(false);
   useEffect(() => {
-    if (!videoMode || !voice.isConnected || recordingStartedRef.current) return;
+    if (!videoMode || !voice.isConnected || locallyCompleted || recordingStartedRef.current) return;
     recordingStartedRef.current = true;
     const micStream = voice.mediaStreamRef.current;
     recording.start(micStream ?? undefined);
-  }, [videoMode, voice.isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [videoMode, voice.isConnected, locallyCompleted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Attach mic stream to recording when it becomes available
   useEffect(() => {
@@ -1398,6 +1398,9 @@ export function VoiceInterface({
     setIsSaving(true);
 
     voice.stopListening();
+    // Disconnect the relay before media uploads; otherwise it can continue
+    // producing responses while long video files are being transferred.
+    voice.stopInteraction();
 
     try {
       await Promise.allSettled([
@@ -1406,7 +1409,7 @@ export function VoiceInterface({
       ]);
 
       try {
-        if (videoMode && recording.isRecording) {
+        if (videoMode) {
           const saveRecordingMetadata = async (metadata: Record<string, unknown>) => {
             const response = await fetch("/api/trpc/session.saveRecording", {
               method: "POST",
@@ -1418,44 +1421,35 @@ export function VoiceInterface({
             }
           };
 
-          const result = await withTimeout(
-            stopRecordingAfterMetadataCheckpoint({
-              screenshots: recording.screenshots.current,
-              persistScreenshots: (screenshots) => withTimeout(
-                saveRecordingMetadata({ screenshots }),
-                8000,
-                "checkpoint screenshot metadata",
-              ),
-              stopRecording: recording.stop,
-              onCheckpointError: (error) =>
-                console.error("[voice] Failed to checkpoint screenshot metadata:", error),
-            }),
-            300_000,
-            "stop recording",
-          );
-          console.log("[voice] FINAL RECORDING RESULT:", {
+          const result = await stopRecordingAfterMetadataCheckpoint({
+            screenshots: recording.screenshots.current,
+            persistScreenshots: (screenshots) => saveRecordingMetadata({ screenshots }),
+            stopRecording: recording.stop,
+            onCheckpointError: (error) =>
+              console.error("[voice] Failed to checkpoint screenshot metadata:", error),
+          });
+          console.log("[voice] Recording uploads finalized:", {
             audioUrl: result.audioUrl,
             screenRecordingUrl: result.screenRecordingUrl,
             cameraRecordingUrl: result.cameraRecordingUrl,
             screenshots: result.screenshots?.length,
           });
-          await withTimeout(
-            saveRecordingMetadata({
-              audioRecordingUrl: result.audioUrl,
-              audioDuration: result.audioDuration,
-              screenRecordingUrl: result.screenRecordingUrl,
-              cameraRecordingUrl: result.cameraRecordingUrl,
-              screenshots: result.screenshots,
-            }),
-            8000,
-            "save recording",
-          );
+          await saveRecordingMetadata({
+            audioRecordingUrl: result.audioUrl,
+            audioDuration: result.audioDuration,
+            screenRecordingUrl: result.screenRecordingUrl,
+            cameraRecordingUrl: result.cameraRecordingUrl,
+            screenshots: result.screenshots,
+          });
         }
       } catch (err) {
         console.error("[voice] Failed to save recording:", err);
       }
 
-      await withTimeout(voice.disconnect(), 8000, "voice disconnect");
+      // Save pending transcript and complete the server session only after
+      // recording metadata persistence has settled.
+      await voice.disconnect();
+
     } catch (err) {
       console.error("[voice] Failed to end interview cleanly:", err);
     } finally {

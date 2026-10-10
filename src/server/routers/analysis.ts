@@ -151,19 +151,32 @@ export const analysisRouter = router({
         }),
       );
 
-      const { data: recordingObjects } = await supabaseAdmin.storage
-        .from("recordings")
-        .list(input.sessionId, { limit: 100 });
-      const recoveredRecording = resolveRecoveredPlaybackRecording(
-        input.sessionId,
-        (session.audioRecordingUrl as string | null) ?? audioRecordingUrl,
-        recordingObjects ?? [],
-      );
-      if (recoveredRecording) {
-        const signedUrl = await resolveSignedUrl("recordings", recoveredRecording.url);
-        if (signedUrl) {
-          audioRecordingUrl = signedUrl;
-          audioRecordings = [{ ...recoveredRecording, url: signedUrl }];
+      // Local recording URLs must not be replaced by Supabase recovery.
+      const hasLocalAudioUrl =
+        typeof audioRecordingUrl === "string" &&
+        audioRecordingUrl.startsWith("/api/session/local-recording?");
+
+      if (!hasLocalAudioUrl) {
+        const { data: recordingObjects } = await supabaseAdmin.storage
+          .from("recordings")
+          .list(input.sessionId, { limit: 100 });
+
+        const recoveredRecording = resolveRecoveredPlaybackRecording(
+          input.sessionId,
+          (session.audioRecordingUrl as string | null) ?? audioRecordingUrl,
+          recordingObjects ?? [],
+        );
+
+        if (recoveredRecording) {
+          const signedUrl = await resolveSignedUrl(
+            "recordings",
+            recoveredRecording.url,
+          );
+
+          if (signedUrl) {
+            audioRecordingUrl = signedUrl;
+            audioRecordings = [{ ...recoveredRecording, url: signedUrl }];
+          }
         }
       }
 
