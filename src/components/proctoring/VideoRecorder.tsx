@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import fixWebmDuration from "fix-webm-duration";
 import { createClient } from "@/lib/supabase/client";
 
 const UUID_REGEX =
@@ -20,6 +21,7 @@ export default function VideoRecorder({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeTypeRef = useRef<string>("video/webm");
+  const startedAtRef = useRef<number>(0);
   const mountedRef = useRef(true);
 
   const safeSetState = useCallback((next: string) => {
@@ -131,9 +133,16 @@ export default function VideoRecorder({
       };
 
       recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, {
-          type: mimeTypeRef.current || "video/webm",
-        });
+        const mime = mimeTypeRef.current || "video/webm";
+        const rawBlob = new Blob(chunksRef.current, { type: mime });
+        const durationMs =
+          startedAtRef.current > 0
+            ? Math.max(1000, Date.now() - startedAtRef.current)
+            : 1000;
+        const blob =
+          mime.includes("webm") && rawBlob.size > 0
+            ? await fixWebmDuration(rawBlob, durationMs).catch(() => rawBlob)
+            : rawBlob;
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((track) => track.stop());
           streamRef.current = null;
@@ -142,6 +151,7 @@ export default function VideoRecorder({
       };
 
       recorder.start(1000);
+      startedAtRef.current = Date.now();
       mediaRecorderRef.current = recorder;
       safeSetState("Recording...");
     } catch {

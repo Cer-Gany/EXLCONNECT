@@ -46,6 +46,7 @@ import { useInterviewRecording } from "@/hooks/use-interview-recording";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useVoice, type InterviewContext } from "@/hooks/use-voice";
 import { stopRecordingAfterMetadataCheckpoint } from "@/lib/recording-finalization";
+import { trpc } from "@/lib/trpc/client";
 import {
     AlertCircle,
     Check,
@@ -1781,6 +1782,97 @@ export function VoiceInterface({
       setCodeEditorActive(false);
     }
   }, [voice.isConnected, isCodingQuestion, isWhiteboardQuestion]);
+
+  // ── Silent one-way live telemetry for recruiter monitoring ──────
+  const publishLiveState = trpc.session.publishLiveState.useMutation();
+  const liveSnapshotStateRef = useRef({
+    aiState: "idle" as "speaking" | "listening" | "thinking" | "transitioning" | "idle",
+    currentQuestionIndex: 0,
+    currentQuestionText: "",
+    userTranscript: "",
+    aiTranscript: "",
+    activeTool: "voice" as "voice" | "whiteboard" | "code",
+  });
+
+  useEffect(() => {
+    liveSnapshotStateRef.current = {
+      aiState: showVoiceTransitioning
+        ? "transitioning"
+        : showVoiceProcessing
+          ? "thinking"
+          : showVoiceSpeaking
+            ? "speaking"
+            : showVoiceListening
+              ? "listening"
+              : "idle",
+      currentQuestionIndex: Math.max(0, voice.currentQuestionIndex),
+      currentQuestionText,
+      userTranscript: voice.userTranscript || "",
+      aiTranscript: voice.aiTranscript || "",
+      activeTool: whiteboardActive
+        ? "whiteboard"
+        : codeEditorActive
+          ? "code"
+          : "voice",
+    };
+  }, [
+    showVoiceTransitioning,
+    showVoiceProcessing,
+    showVoiceSpeaking,
+    showVoiceListening,
+    voice.currentQuestionIndex,
+    currentQuestionText,
+    voice.userTranscript,
+    voice.aiTranscript,
+    whiteboardActive,
+    codeEditorActive,
+  ]);
+
+  useEffect(() => {
+    if (preview || shouldShowCompletionScreen || !sessionId) return;
+
+    const pushSnapshot = () => {
+      const frames = recording.captureLiveFrames();
+      const s = liveSnapshotStateRef.current;
+      let codeSnippet: { language: string; code: string } | undefined;
+      try {
+        const rawCode =
+          codeEditorRef.current?.getSnapshotData() ??
+          liveCodeSnapshotRef.current;
+        if (rawCode) {
+          const parsed = JSON.parse(rawCode) as {
+            code?: string;
+            language?: string;
+          };
+          if (typeof parsed.code === "string") {
+            codeSnippet = {
+              language: parsed.language || "plaintext",
+              code: parsed.code,
+            };
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+
+      publishLiveState.mutate({
+        sessionId,
+        cameraFrame: frames.cameraFrame,
+        screenFrame: frames.screenFrame,
+        aiState: s.aiState,
+        currentQuestionIndex: s.currentQuestionIndex,
+        currentQuestionText: s.currentQuestionText,
+        userTranscript: s.userTranscript,
+        aiTranscript: s.aiTranscript,
+        activeTool: s.activeTool,
+        codeSnippet,
+      });
+    };
+
+    const timer = setInterval(pushSnapshot, 1400);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, shouldShowCompletionScreen, sessionId]);
 
   // ── Render ──────────────────────────────────────────────────────
   return shouldShowCompletionScreen ? completionScreen : (

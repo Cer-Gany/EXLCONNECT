@@ -856,4 +856,100 @@ export const sessionRouter = router({
 
       return { deleted: input.ids.length };
     }),
+
+  publishLiveState: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        cameraFrame: z.string().max(350_000).optional(),
+        screenFrame: z.string().max(500_000).optional(),
+        aiState: z
+          .enum(["speaking", "listening", "thinking", "transitioning", "idle"])
+          .optional(),
+        currentQuestionIndex: z.number().int().min(0).optional(),
+        currentQuestionText: z.string().max(2000).optional(),
+        userTranscript: z.string().max(4000).optional(),
+        aiTranscript: z.string().max(4000).optional(),
+        activeTool: z.enum(["voice", "whiteboard", "code", "chat"]).optional(),
+        codeSnippet: z
+          .object({
+            language: z.string().max(64),
+            code: z.string().max(50_000),
+          })
+          .optional(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const store = getLiveSessionStore();
+      const now = Date.now();
+
+      // Prune stale sessions older than 90 seconds
+      for (const [id, entry] of store.entries()) {
+        if (now - entry.updatedAt > 90_000) {
+          store.delete(id);
+        }
+      }
+
+      const prev = store.get(input.sessionId);
+      store.set(input.sessionId, {
+        sessionId: input.sessionId,
+        cameraFrame: input.cameraFrame ?? prev?.cameraFrame,
+        screenFrame: input.screenFrame ?? prev?.screenFrame,
+        aiState: input.aiState ?? prev?.aiState ?? "idle",
+        currentQuestionIndex:
+          input.currentQuestionIndex ?? prev?.currentQuestionIndex ?? 0,
+        currentQuestionText:
+          input.currentQuestionText ?? prev?.currentQuestionText ?? "",
+        userTranscript: input.userTranscript ?? prev?.userTranscript ?? "",
+        aiTranscript: input.aiTranscript ?? prev?.aiTranscript ?? "",
+        activeTool: input.activeTool ?? prev?.activeTool ?? "voice",
+        codeSnippet: input.codeSnippet ?? prev?.codeSnippet,
+        updatedAt: now,
+      });
+
+      return { ok: true };
+    }),
+
+  getLiveState: protectedProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(({ input }) => {
+      const store = getLiveSessionStore();
+      const entry = store.get(input.sessionId);
+      if (!entry) return null;
+      // Consider live feed active if updated within the last 30 seconds
+      const isLive = Date.now() - entry.updatedAt < 30_000;
+      return {
+        ...entry,
+        isLive,
+      };
+    }),
 });
+
+export interface LiveSessionState {
+  sessionId: string;
+  cameraFrame?: string;
+  screenFrame?: string;
+  aiState: "speaking" | "listening" | "thinking" | "transitioning" | "idle";
+  currentQuestionIndex: number;
+  currentQuestionText: string;
+  userTranscript: string;
+  aiTranscript: string;
+  activeTool: "voice" | "whiteboard" | "code" | "chat";
+  codeSnippet?: { language: string; code: string };
+  updatedAt: number;
+}
+
+const globalForLiveSessions = globalThis as unknown as {
+  __liveSessionStates?: Map<string, LiveSessionState>;
+};
+
+function getLiveSessionStore(): Map<string, LiveSessionState> {
+  if (!globalForLiveSessions.__liveSessionStates) {
+    globalForLiveSessions.__liveSessionStates = new Map<
+      string,
+      LiveSessionState
+    >();
+  }
+  return globalForLiveSessions.__liveSessionStates;
+}
+

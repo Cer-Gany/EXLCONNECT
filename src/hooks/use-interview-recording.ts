@@ -76,7 +76,9 @@ function stopMediaRecorderSafely(
 function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
-    const audio = new Audio();
+    const isVideo = blob.type.startsWith("video/");
+    const media = document.createElement(isVideo ? "video" : "audio");
+    media.muted = true;
     let resolved = false;
     const timeout = setTimeout(() => {
       if (!resolved) { resolved = true; cleanup(); resolve(undefined); }
@@ -84,8 +86,8 @@ function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
 
     function cleanup() {
       clearTimeout(timeout);
-      audio.removeAttribute("src");
-      audio.load();
+      media.removeAttribute("src");
+      media.load();
       URL.revokeObjectURL(url);
     }
 
@@ -93,25 +95,25 @@ function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
       if (resolved) return;
       resolved = true;
       cleanup();
-      resolve(Math.round(dur));
+      resolve(Math.max(1, Math.round(dur)));
     }
 
-    audio.addEventListener("durationchange", () => {
-      if (audio.duration && isFinite(audio.duration)) {
-        finish(audio.duration);
+    media.addEventListener("durationchange", () => {
+      if (media.duration && isFinite(media.duration) && media.duration < 1e8) {
+        finish(media.duration);
       }
     });
 
-    audio.addEventListener("loadedmetadata", () => {
-      if (audio.duration && isFinite(audio.duration)) {
-        finish(audio.duration);
+    media.addEventListener("loadedmetadata", () => {
+      if (media.duration && isFinite(media.duration) && media.duration < 1e8) {
+        finish(media.duration);
       } else {
-        audio.currentTime = 1e10;
+        media.currentTime = 1e10;
       }
     });
 
-    audio.preload = "auto";
-    audio.src = url;
+    media.preload = "auto";
+    media.src = url;
   });
 }
 
@@ -143,6 +145,8 @@ export function useInterviewRecording({
   const cameraChunksRef = useRef<Blob[]>([]);
   const screenMimeRef = useRef<string>("");
   const cameraMimeRef = useRef<string>("");
+  const cameraStartedAtRef = useRef<number>(0);
+  const screenStartedAtRef = useRef<number>(0);
   const chunksRef = useRef<Blob[]>([]);
   const audioMimeRef = useRef<string>("");
   const mixCtxRef = useRef<AudioContext | null>(null);
@@ -274,6 +278,7 @@ export function useInterviewRecording({
     };
 
     recorder.start(5000);
+    cameraStartedAtRef.current = Date.now();
     cameraRecorderRef.current = recorder;
 
     log.info("Camera video recording started:", mimeType);
@@ -334,6 +339,7 @@ export function useInterviewRecording({
     };
 
     recorder.start(5000);
+    screenStartedAtRef.current = Date.now();
     screenRecorderRef.current = recorder;
 
     log.info("Screen video recording started:", mimeType);
@@ -468,6 +474,44 @@ export function useInterviewRecording({
     return Promise.all(pending).then(() => undefined);
   }, [captureAndUpload]);
 
+  /**
+   * Capture lightweight JPEG data URLs from the active camera & screen streams
+   * for one-way live recruiter monitoring (without disk/storage uploads).
+   */
+  const captureLiveFrames = useCallback((): {
+    cameraFrame?: string;
+    screenFrame?: string;
+  } => {
+    const snap = (
+      video: HTMLVideoElement | null,
+      maxW: number,
+      mirror: boolean,
+    ): string | undefined => {
+      if (!video || video.readyState < 2 || video.videoWidth === 0) {
+        return undefined;
+      }
+      const scale = Math.min(1, maxW / video.videoWidth);
+      const w = Math.max(1, Math.round(video.videoWidth * scale));
+      const h = Math.max(1, Math.round(video.videoHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx2d = canvas.getContext("2d");
+      if (!ctx2d) return undefined;
+      if (mirror) {
+        ctx2d.translate(w, 0);
+        ctx2d.scale(-1, 1);
+      }
+      ctx2d.drawImage(video, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", 0.52);
+    };
+
+    return {
+      cameraFrame: snap(cameraVideoRef.current, 360, true),
+      screenFrame: snap(screenVideoRef.current, 640, false),
+    };
+  }, []);
+
   /** Start recording audio and periodic screenshots. */
   const start = useCallback(
     async (micStream?: MediaStream) => {
@@ -599,6 +643,7 @@ export function useInterviewRecording({
     const recorder = recorderRef.current;
     const cameraRecorder = cameraRecorderRef.current;
     const screenRecorder = screenRecorderRef.current;
+    const stoppedAtMs = Date.now();
     // Stop every recorder before doing duration parsing or network I/O. Each
     // stop promise resolves on stop or a bounded timeout, and stop's final
     // dataavailable event is delivered before its stop event.
@@ -672,26 +717,50 @@ export function useInterviewRecording({
       }
     }
 
-    // Build every final blob before starting independent storage requests.
+    // Build every final blob (and patch WebM duration headers on camera & screen videos)
+    // before starting independent storage requests.
     const videoUploads: Promise<string | undefined>[] = [];
     const cameraUploadIndex = cameraChunksRef.current.length > 0 ? videoUploads.length : -1;
     const cameraMime = cameraMimeRef.current || "video/webm";
-    const cameraBlob = new Blob(cameraChunksRef.current, {
+    const rawCameraBlob = new Blob(cameraChunksRef.current, {
       type: cameraMime,
     });
-    if (cameraBlob.size > 0) videoUploads.push(uploadRecording(cameraBlob, `camera-recording-${Date.now()}.webm`));
+    if (rawCameraBlob.size > 0) {
+      const elapsedCameraMs = cameraStartedAtRef.current > 0
+        ? Math.max(1000, stoppedAtMs - cameraStartedAtRef.current)
+        : (audioDuration ? audioDuration * 1000 : undefined);
+      const resolvedCamSec = await resolveBlobDuration(rawCameraBlob);
+      const cameraDurationMs = resolvedCamSec ? resolvedCamSec * 1000 : elapsedCameraMs;
+      const cameraBlob =
+        cameraMime.includes("webm") && cameraDurationMs
+          ? await fixWebmDuration(rawCameraBlob, cameraDurationMs).catch(() => rawCameraBlob)
+          : rawCameraBlob;
+      videoUploads.push(uploadRecording(cameraBlob, `camera-recording-${Date.now()}.webm`));
+    }
 
     cameraRecorderRef.current = null;
     cameraChunksRef.current = [];
     cameraMimeRef.current = "";
+    cameraStartedAtRef.current = 0;
 
     const screenUploadIndex = screenChunksRef.current.length > 0 ? videoUploads.length : -1;
     const screenMime = screenMimeRef.current || "video/webm";
-    const screenBlob = new Blob(screenChunksRef.current, {
+    const rawScreenBlob = new Blob(screenChunksRef.current, {
       type: screenMime,
     });
 
-    if (screenBlob.size > 0) videoUploads.push(uploadRecording(screenBlob, `screen-recording-${Date.now()}.webm`));
+    if (rawScreenBlob.size > 0) {
+      const elapsedScreenMs = screenStartedAtRef.current > 0
+        ? Math.max(1000, stoppedAtMs - screenStartedAtRef.current)
+        : (audioDuration ? audioDuration * 1000 : undefined);
+      const resolvedScreenSec = await resolveBlobDuration(rawScreenBlob);
+      const screenDurationMs = resolvedScreenSec ? resolvedScreenSec * 1000 : elapsedScreenMs;
+      const screenBlob =
+        screenMime.includes("webm") && screenDurationMs
+          ? await fixWebmDuration(rawScreenBlob, screenDurationMs).catch(() => rawScreenBlob)
+          : rawScreenBlob;
+      videoUploads.push(uploadRecording(screenBlob, `screen-recording-${Date.now()}.webm`));
+    }
 
     let audioUpload: Promise<string | undefined> = Promise.resolve(undefined);
     if (audioBlob?.size) audioUpload = uploadRecording(audioBlob, `recording-${Date.now()}.${audioMimeRef.current.includes("webm") ? "webm" : "m4a"}`);
@@ -703,6 +772,7 @@ export function useInterviewRecording({
     screenRecorderRef.current = null;
     screenChunksRef.current = [];
     screenMimeRef.current = "";
+    screenStartedAtRef.current = 0;
 
     recorderRef.current = null;
 
@@ -790,6 +860,7 @@ export function useInterviewRecording({
     addTtsChunk,
     cancelTts,
     attachMicStream,
+    captureLiveFrames,
     cameraStream,
     screenStream,
     isRecording,

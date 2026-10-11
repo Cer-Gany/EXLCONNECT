@@ -456,7 +456,17 @@ export function SessionsTable({
           </span>
         );
       case "status":
-        return (
+        return session.status === "IN_PROGRESS" ? (
+          <div className="inline-flex items-center gap-2 whitespace-nowrap">
+            <Badge
+              variant="secondary"
+              className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 whitespace-nowrap flex items-center gap-1.5"
+            >
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+              LIVE — Watch
+            </Badge>
+          </div>
+        ) : (
           <Badge
             variant={session.status === "COMPLETED" ? "default" : "secondary"}
             className="whitespace-nowrap"

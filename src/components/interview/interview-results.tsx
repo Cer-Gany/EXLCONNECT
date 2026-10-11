@@ -34,28 +34,274 @@ import {
   ChevronUp,
   Clock,
   Code2,
+  EyeOff,
   FileDown,
   FileText,
   HelpCircle,
   Lightbulb,
   Loader2,
+  Maximize2,
   MessageCircle,
   MessageSquare,
   Mic,
   Monitor,
-  Video,
+  Pause,
   PenLine,
+  Play,
+  Radio,
   Search,
+  SkipBack,
+  SkipForward,
   SmilePlus,
   Sparkles,
   Tags,
   Target,
   UserCheck,
   Users,
+  Video,
   Volume2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+function formatMediaTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
+  const totalSec = Math.floor(seconds);
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+/**
+ * Video player that automatically resolves WebM Infinity-duration files by
+ * probing the stream end on metadata load, and renders an always-seekable
+ * timeline scrubber + current/total duration display + speed controls.
+ */
+function SeekableVideoPlayer({
+  src,
+  fallbackDurationSeconds,
+}: {
+  src: string;
+  fallbackDurationSeconds?: number | null;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const probingDurationRef = useRef(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState<number>(
+    fallbackDurationSeconds && fallbackDurationSeconds > 0
+      ? fallbackDurationSeconds
+      : 0,
+  );
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    if (
+      fallbackDurationSeconds &&
+      fallbackDurationSeconds > 0 &&
+      duration <= 0
+    ) {
+      setDuration(fallbackDurationSeconds);
+    }
+  }, [fallbackDurationSeconds, duration]);
+
+  const handleLoadedMetadata = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (Number.isFinite(v.duration) && v.duration > 0 && v.duration < 1e7) {
+      setDuration(v.duration);
+      setIsReady(true);
+    } else if (!probingDurationRef.current) {
+      // Browser opened a WebM without an EBML Duration header (v.duration === Infinity).
+      // Seek to a huge timestamp so the browser indexes the byte range and computes real duration.
+      probingDurationRef.current = true;
+      v.currentTime = 1e101;
+    }
+  }, []);
+
+  const handleDurationChange = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (Number.isFinite(v.duration) && v.duration > 0 && v.duration < 1e7) {
+      setDuration(v.duration);
+      if (probingDurationRef.current) {
+        probingDurationRef.current = false;
+        v.currentTime = 0;
+        setCurrentTime(0);
+      }
+      setIsReady(true);
+    }
+  }, []);
+
+  const handleTimeUpdate = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (probingDurationRef.current) {
+      if (Number.isFinite(v.duration) && v.duration > 0 && v.duration < 1e7) {
+        setDuration(v.duration);
+      } else if (v.currentTime > 0 && v.currentTime < 1e7) {
+        setDuration(v.currentTime);
+      }
+      probingDurationRef.current = false;
+      v.currentTime = 0;
+      setCurrentTime(0);
+      setIsReady(true);
+      return;
+    }
+    setCurrentTime(v.currentTime);
+    if (
+      Number.isFinite(v.duration) &&
+      v.duration > 0 &&
+      v.duration < 1e7 &&
+      Math.abs(v.duration - duration) > 0.5
+    ) {
+      setDuration(v.duration);
+    } else if (v.currentTime > duration) {
+      setDuration(v.currentTime);
+    }
+  }, [duration]);
+
+  const effectiveDuration = Math.max(
+    duration,
+    fallbackDurationSeconds ?? 0,
+    currentTime,
+    1,
+  );
+
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || probingDurationRef.current) return;
+    if (v.paused) {
+      void v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, []);
+
+  const seekTo = useCallback(
+    (targetSec: number) => {
+      const v = videoRef.current;
+      if (!v || probingDurationRef.current) return;
+      const clamped = Math.max(0, Math.min(effectiveDuration, targetSec));
+      v.currentTime = clamped;
+      setCurrentTime(clamped);
+    },
+    [effectiveDuration],
+  );
+
+  const cycleSpeed = useCallback(() => {
+    const speeds = [1, 1.25, 1.5, 2];
+    const next = speeds[(speeds.indexOf(playbackRate) + 1) % speeds.length];
+    setPlaybackRate(next);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = next;
+    }
+  }, [playbackRate]);
+
+  const handleFullscreen = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.requestFullscreen) {
+      void v.requestFullscreen();
+    }
+  }, []);
+
+  return (
+    <div className="overflow-hidden rounded-lg border bg-zinc-950">
+      <video
+        ref={videoRef}
+        controls
+        preload="auto"
+        src={src}
+        onLoadedMetadata={handleLoadedMetadata}
+        onDurationChange={handleDurationChange}
+        onTimeUpdate={handleTimeUpdate}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+        className="max-h-[540px] w-full bg-black object-contain"
+      />
+      {/* Always-available custom timeline scrubber & exact duration bar */}
+      <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-zinc-200">
+        <button
+          type="button"
+          onClick={togglePlay}
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors"
+          title={isPlaying ? "Pause" : "Play"}
+        >
+          {isPlaying ? (
+            <Pause className="h-3.5 w-3.5" />
+          ) : (
+            <Play className="h-3.5 w-3.5" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => seekTo(currentTime - 10)}
+          className="flex items-center gap-0.5 rounded px-1.5 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
+          title="Rewind 10 seconds"
+        >
+          <SkipBack className="h-3 w-3" />
+          <span>10s</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => seekTo(currentTime + 10)}
+          className="flex items-center gap-0.5 rounded px-1.5 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
+          title="Forward 10 seconds"
+        >
+          <span>10s</span>
+          <SkipForward className="h-3 w-3" />
+        </button>
+
+        <span className="font-mono text-[11px] tabular-nums text-zinc-300 shrink-0">
+          {formatMediaTime(currentTime)}{" "}
+          <span className="text-zinc-500">/</span>{" "}
+          {isReady || duration > 0
+            ? formatMediaTime(effectiveDuration)
+            : "Loading..."}
+        </span>
+
+        <input
+          type="range"
+          min={0}
+          max={effectiveDuration}
+          step={0.1}
+          value={Math.min(currentTime, effectiveDuration)}
+          onChange={(e) => seekTo(parseFloat(e.target.value))}
+          className="h-1.5 flex-1 cursor-pointer accent-primary"
+          aria-label="Seek video timeline"
+        />
+
+        <button
+          type="button"
+          onClick={cycleSpeed}
+          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 font-mono text-[11px] text-zinc-200 hover:bg-zinc-700"
+          title="Playback speed"
+        >
+          {playbackRate}x
+        </button>
+
+        <button
+          type="button"
+          onClick={handleFullscreen}
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-800 hover:bg-zinc-700 transition-colors"
+          title="Fullscreen"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface QuestionEvaluation {
   question: string;
   score: number;
@@ -85,10 +331,15 @@ export function InterviewResults({
   );
   const utils = trpc.useUtils();
 
-  const sessions = trpc.session.listByInterview.useQuery({
-    interviewId,
-    limit: 100,
-  });
+  const sessions = trpc.session.listByInterview.useQuery(
+    {
+      interviewId,
+      limit: 100,
+    },
+    {
+      refetchInterval: 5000,
+    },
+  );
   const insights = trpc.analysis.getInterviewInsights.useQuery({ interviewId });
 
   if (selectedSessionId) {
@@ -200,11 +451,33 @@ function SessionDetail({
 }) {
   const { toast } = useToast();
   const { currentOrg } = useOrg();
-  const summary = trpc.analysis.getSessionSummary.useQuery({ sessionId });
+  const summary = trpc.analysis.getSessionSummary.useQuery(
+    { sessionId },
+    {
+      refetchInterval: (query) =>
+        query.state.data?.status === "IN_PROGRESS" ? 2500 : false,
+    },
+  );
+  const isOngoing = summary.data?.status === "IN_PROGRESS";
+  const liveStateQuery = trpc.session.getLiveState.useQuery(
+    { sessionId },
+    {
+      enabled: isOngoing,
+      refetchInterval: isOngoing ? 1200 : false,
+    },
+  );
+  const liveState = liveStateQuery.data;
   const completeSession = trpc.session.complete.useMutation();
   const [generating, setGenerating] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  // Auto-open transcript when watching an ongoing live session
+  useEffect(() => {
+    if (isOngoing) {
+      setTranscriptOpen(true);
+    }
+  }, [isOngoing]);
   const [exporting, setExporting] = useState(false);
   const [pdfCapture, setPdfCapture] = useState(false);
   const [lightboxImg, setLightboxImg] = useState<{
@@ -656,6 +929,182 @@ function SessionDetail({
             })()}
 
             <Separator />
+
+            {/* Live One-Way Recruiter Monitor for ongoing interviews */}
+            {isOngoing && (() => {
+              const screenshots = summary.data?.screenshots as
+                | {
+                    url: string;
+                    path: string;
+                    timestamp: string;
+                    type: "camera" | "screen";
+                  }[]
+                | null;
+              const latestCamShot = screenshots
+                ?.filter((s) => s.type === "camera")
+                .slice(-1)[0]?.url;
+              const latestScreenShot = screenshots
+                ?.filter((s) => s.type === "screen")
+                .slice(-1)[0]?.url;
+
+              const liveCameraSrc = liveState?.cameraFrame || latestCamShot;
+              const liveScreenSrc = liveState?.screenFrame || latestScreenShot;
+              const aiStatusText =
+                liveState?.aiState === "speaking"
+                  ? "AI Interviewer Speaking"
+                  : liveState?.aiState === "listening"
+                    ? "Listening to Candidate"
+                    : liveState?.aiState === "thinking"
+                      ? "AI Thinking..."
+                      : liveState?.aiState === "transitioning"
+                        ? "Moving to Next Question..."
+                        : "Session Active";
+
+              return (
+                <Card className="border-emerald-500/40 bg-emerald-950/5 dark:bg-emerald-950/20 shadow-lg">
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <CardTitle className="flex items-center gap-2.5 text-base">
+                        <span className="relative flex h-3 w-3">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                          <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
+                        </span>
+                        <Radio className="h-4 w-4 text-emerald-500" />
+                        Live Interview Monitor
+                      </CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 text-xs"
+                        >
+                          <EyeOff className="h-3.5 w-3.5" />
+                          Stealth Mode: Candidate cannot see or hear you
+                        </Badge>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Live status & current question banner */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card/80 px-3.5 py-2.5 text-xs">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="capitalize">
+                          {aiStatusText}
+                        </Badge>
+                        {liveState?.activeTool && (
+                          <Badge variant="outline" className="uppercase text-[10px]">
+                            Active View: {liveState.activeTool}
+                          </Badge>
+                        )}
+                      </div>
+                      {liveState?.currentQuestionText && (
+                        <p className="truncate max-w-xl text-muted-foreground font-medium">
+                          Q{(liveState.currentQuestionIndex ?? 0) + 1}:{" "}
+                          {liveState.currentQuestionText}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Live Camera & Screen Feeds */}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="overflow-hidden rounded-lg border bg-zinc-950">
+                        <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                            <Camera className="h-3.5 w-3.5 text-emerald-400" />
+                            Candidate Camera (Live)
+                          </span>
+                          <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Live
+                          </span>
+                        </div>
+                        <div className="flex h-64 items-center justify-center bg-black">
+                          {liveCameraSrc ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={liveCameraSrc}
+                              alt="Live candidate camera"
+                              className="h-full w-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center gap-2 text-xs text-zinc-500">
+                              <Camera className="h-6 w-6 opacity-40" />
+                              <span>Waiting for candidate camera stream...</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="overflow-hidden rounded-lg border bg-zinc-950">
+                        <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                            <Monitor className="h-3.5 w-3.5 text-emerald-400" />
+                            Candidate Screen (Live)
+                          </span>
+                          <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Live
+                          </span>
+                        </div>
+                        <div className="flex h-64 items-center justify-center bg-black">
+                          {liveScreenSrc ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={liveScreenSrc}
+                              alt="Live candidate screen"
+                              className="h-full w-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center gap-2 text-xs text-zinc-500">
+                              <Monitor className="h-6 w-6 opacity-40" />
+                              <span>Waiting for candidate screen share...</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Live real-time captions while speaking */}
+                    {(liveState?.userTranscript || liveState?.aiTranscript) && (
+                      <div className="space-y-2 rounded-lg border bg-card/90 p-3 text-xs">
+                        {liveState.aiTranscript && (
+                          <p className="text-muted-foreground">
+                            <span className="font-semibold text-foreground">
+                              Interviewer (Live):{" "}
+                            </span>
+                            {liveState.aiTranscript}
+                          </p>
+                        )}
+                        {liveState.userTranscript && (
+                          <p className="text-muted-foreground">
+                            <span className="font-semibold text-primary">
+                              Candidate (Live):{" "}
+                            </span>
+                            {liveState.userTranscript}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Live Code Editor View if candidate is writing code */}
+                    {liveState?.codeSnippet?.code && (
+                      <div className="overflow-hidden rounded-lg border bg-zinc-950">
+                        <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                            <Code2 className="h-3.5 w-3.5 text-emerald-400" />
+                            Live Code Editor ({liveState.codeSnippet.language})
+                          </span>
+                        </div>
+                        <CodeBlock
+                          code={liveState.codeSnippet.code}
+                          language={liveState.codeSnippet.language}
+                          className="max-h-60 text-xs"
+                        />
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
 
             {/* Generate report if no summary yet */}
             {!summary.data?.summary && (
@@ -1253,11 +1702,9 @@ function SessionDetail({
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <video
-                    controls
-                    preload="metadata"
+                  <SeekableVideoPlayer
                     src={summary.data.screenRecordingUrl}
-                    className="w-full rounded-lg border bg-black"
+                    fallbackDurationSeconds={summary.data?.totalDurationSeconds}
                   />
                 </CardContent>
               </Card>
@@ -1273,11 +1720,9 @@ function SessionDetail({
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <video
-                    controls
-                    preload="metadata"
+                  <SeekableVideoPlayer
                     src={summary.data.cameraRecordingUrl}
-                    className="w-full rounded-lg border bg-black"
+                    fallbackDurationSeconds={summary.data?.totalDurationSeconds}
                   />
                 </CardContent>
               </Card>

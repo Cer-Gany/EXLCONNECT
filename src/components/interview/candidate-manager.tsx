@@ -513,7 +513,10 @@ export function CandidateManager({
   }, [columnOrder]);
 
   // ── Data ──
-  const candidateList = trpc.candidate.list.useQuery({ interviewId });
+  const candidateList = trpc.candidate.list.useQuery(
+    { interviewId },
+    { refetchInterval: 5000 },
+  );
   const insights = trpc.analysis.getInterviewInsights.useQuery({ interviewId });
 
   const removeCandidatesMutation = trpc.candidate.removeMany.useMutation({
@@ -729,11 +732,6 @@ export function CandidateManager({
       removeSessionsMutation.mutate({ ids: sessionIds }, { onSuccess: onDone });
     }
   }, [selectedIds, removeCandidatesMutation, removeSessionsMutation, toast]);
-
-  // Clear selection when data changes
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [candidateList.data]);
 
   const handleExport = useCallback(() => {
     const nameCol = COLUMNS.find((c) => c.alwaysVisible)!;
@@ -1231,16 +1229,25 @@ export function CandidateManager({
                             Invited
                           </Badge>
                         ),
-                      status: (
-                        <Badge
-                          variant={getSessionBadgeVariant(status)}
-                          className="whitespace-nowrap"
-                        >
-                          {status === "Not Started"
-                            ? "NOT STARTED"
-                            : status.replace("_", " ")}
-                        </Badge>
-                      ),
+                      status:
+                        status === "IN_PROGRESS" ? (
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 whitespace-nowrap inline-flex items-center gap-1.5"
+                          >
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+                            LIVE — Watch
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant={getSessionBadgeVariant(status)}
+                            className="whitespace-nowrap"
+                          >
+                            {status === "Not Started"
+                              ? "NOT STARTED"
+                              : status.replace("_", " ")}
+                          </Badge>
+                        ),
                     };
 
                     return (

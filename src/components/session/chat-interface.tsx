@@ -29,6 +29,7 @@ import {
     useSessionToolChunkPrefetch,
 } from "@/hooks/use-chunk-load-recovery";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { trpc } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import {
     Check,
@@ -1315,6 +1316,85 @@ export function ChatInterface({
         )}
       </div>
     ) : null;
+
+  const publishLiveState = trpc.session.publishLiveState.useMutation();
+  const chatLiveSnapshotRef = useRef({
+    aiState: "idle" as "speaking" | "listening" | "thinking" | "idle",
+    currentQuestionIndex: 0,
+    currentQuestionText: "",
+    userTranscript: "",
+    aiTranscript: "",
+    activeTool: "chat" as "chat" | "whiteboard" | "code",
+  });
+
+  useEffect(() => {
+    const lastAssistant = displayMessages
+      .filter((m) => m.role === "ASSISTANT")
+      .slice(-1)[0]?.content ?? "";
+    chatLiveSnapshotRef.current = {
+      aiState: aiTyping
+        ? "speaking"
+        : sending
+          ? "thinking"
+          : "listening",
+      currentQuestionIndex: currentQuestion,
+      currentQuestionText: currentQ?.text ?? "",
+      userTranscript: input,
+      aiTranscript: lastAssistant,
+      activeTool: whiteboardOpen
+        ? "whiteboard"
+        : codeEditorOpen || isCodingQuestion
+          ? "code"
+          : "chat",
+    };
+  }, [
+    aiTyping,
+    sending,
+    currentQuestion,
+    currentQ?.text,
+    input,
+    displayMessages,
+    whiteboardOpen,
+    codeEditorOpen,
+    isCodingQuestion,
+  ]);
+
+  useEffect(() => {
+    if (preview || finishing || !sessionId) return;
+    const timer = setInterval(() => {
+      const s = chatLiveSnapshotRef.current;
+      let codeSnippet: { language: string; code: string } | undefined;
+      try {
+        const rawCode = codeEditorRef.current?.getSnapshotData();
+        if (rawCode) {
+          const parsed = JSON.parse(rawCode) as {
+            code?: string;
+            language?: string;
+          };
+          if (typeof parsed.code === "string") {
+            codeSnippet = {
+              language: parsed.language || "plaintext",
+              code: parsed.code,
+            };
+          }
+        }
+      } catch {
+        // ignore
+      }
+      publishLiveState.mutate({
+        sessionId,
+        aiState: s.aiState,
+        currentQuestionIndex: s.currentQuestionIndex,
+        currentQuestionText: s.currentQuestionText,
+        userTranscript: s.userTranscript,
+        aiTranscript: s.aiTranscript,
+        activeTool: s.activeTool,
+        codeSnippet,
+      });
+    }, 1800);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, finishing, sessionId]);
 
   const renderSessionHeader = (fullWidth = false) => (
     <div className="shrink-0 border-b bg-card py-2 md:py-3">
