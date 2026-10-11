@@ -537,10 +537,17 @@ export function VoiceInterface({
   useEffect(() => {
     if (preview) return;
     const handleBeforeUnload = () => {
-      navigator.sendBeacon(
-        "/api/session/leave",
-        new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
-      );
+      if (endingRef.current) {
+        navigator.sendBeacon(
+          "/api/session/complete",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      } else {
+        navigator.sendBeacon(
+          "/api/session/leave",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      }
 
       // Persist any unsent transcript messages
       const msgPayload = getUnsentPayloadRef.current();
@@ -575,10 +582,17 @@ export function VoiceInterface({
     };
 
     const handlePageHide = () => {
-      navigator.sendBeacon(
-        "/api/session/leave",
-        new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
-      );
+      if (endingRef.current) {
+        navigator.sendBeacon(
+          "/api/session/complete",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      } else {
+        navigator.sendBeacon(
+          "/api/session/leave",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      }
       // Persist any unsent transcript messages
       const msgPayload = getUnsentPayloadRef.current();
       if (msgPayload) {
@@ -1396,7 +1410,6 @@ export function VoiceInterface({
     const normalizedReason = normalizeSessionEndReason(reason);
     endingRef.current = true;
     setLocalCompletionReason(normalizedReason);
-    setLocallyCompleted(true);
     setIsSaving(true);
 
     voice.stopListening();
@@ -1404,8 +1417,26 @@ export function VoiceInterface({
     // producing responses while long video files are being transferred.
     voice.stopInteraction();
 
+    const markSessionCompletedOnServer = async () => {
+      if (preview || !sessionId || sessionId === "__preview__") return;
+      try {
+        await fetch("/api/session/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+          keepalive: true,
+        });
+      } catch (err) {
+        console.error("[voice] Safety-net session complete failed:", err);
+      }
+    };
+
     try {
+      // Immediately persist final transcript messages and mark session COMPLETED
+      // so the recruiter dashboard reflects COMPLETED right away.
       await Promise.allSettled([
+        withTimeout(voice.disconnect(), 5000, "disconnect and complete voice session"),
+        withTimeout(markSessionCompletedOnServer(), 5000, "mark session completed"),
         withTimeout(saveAllDrawings(), 5000, "save drawings"),
         withTimeout(saveAllCodeSnippets(), 5000, "save code snippets"),
       ]);
@@ -1448,16 +1479,15 @@ export function VoiceInterface({
         console.error("[voice] Failed to save recording:", err);
       }
 
-      // Save pending transcript and complete the server session only after
-      // recording metadata persistence has settled.
-      await voice.disconnect();
-
+      await markSessionCompletedOnServer();
     } catch (err) {
       console.error("[voice] Failed to end interview cleanly:", err);
     } finally {
+      setIsSaving(false);
+      setLocallyCompleted(true);
       onComplete?.(normalizedReason);
     }
-  }, [saveAllDrawings, saveAllCodeSnippets, videoMode, recording, sessionId, voice, onComplete]);
+  }, [saveAllDrawings, saveAllCodeSnippets, videoMode, recording, sessionId, preview, voice, onComplete]);
 
   useEffect(() => {
     handleEndInterviewRef.current = handleEndInterview;
