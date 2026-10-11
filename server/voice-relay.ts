@@ -254,13 +254,17 @@ function getTtsOptions(language?: string): TtsSynthesisOptions {
   };
 }
 
-if (!ASR_API_KEY) {
-  log.error("Missing DOUBAO_API_KEY in .env.local (required for BigModel streaming ASR)");
-  process.exit(1);
-}
-if (!TTS_APP_ID || !TTS_ACCESS_TOKEN) {
-  log.error("Missing DOUBAO_APP_ID or DOUBAO_ACCESS_TOKEN in .env.local (required for TTS)");
-  process.exit(1);
+const hasDoubaoCredentials = Boolean(ASR_API_KEY && TTS_APP_ID && TTS_ACCESS_TOKEN);
+
+if (!hasDoubaoCredentials && !process.env.GEMINI_API_KEY) {
+  if (!ASR_API_KEY) {
+    log.error("Missing DOUBAO_API_KEY in .env.local (required for BigModel streaming ASR)");
+    process.exit(1);
+  }
+  if (!TTS_APP_ID || !TTS_ACCESS_TOKEN) {
+    log.error("Missing DOUBAO_APP_ID or DOUBAO_ACCESS_TOKEN in .env.local (required for TTS)");
+    process.exit(1);
+  }
 }
 
 // ── Interview context type ──────────────────────────────────────────
@@ -768,46 +772,61 @@ async function summarizeQuestion(
 
 // ── Relay server ────────────────────────────────────────────────────
 
-const wss = new WebSocketServer({ port: RELAY_PORT });
-log.info(`ASR: resource=${ASR_RESOURCE_ID}, auth=X-Api-Key(${ASR_API_KEY.slice(0, 8)}...)`);
-log.info(`ASR VAD: end_window_size=${ASR_END_WINDOW_MS}ms, force_to_speech=${ASR_FORCE_SPEECH_MS}ms`);
-log.info(`ASR final coalescing: normal=${ASR_FINAL_COALESCE_MS}ms, long=${ASR_LONG_FINAL_COALESCE_MS}ms, quiet=${ASR_PENDING_FINAL_QUIET_MS}ms, active_speech_hold=${ASR_ACTIVE_SPEECH_HOLD_MS}ms, max_active_hold=${ASR_MAX_ACTIVE_SPEECH_HOLD_MS}ms, session_max_speech=${ASR_SESSION_MAX_CONTINUOUS_SPEECH_MS}ms, stuck_rotate=${ASR_STUCK_TEXT_ROTATE_MS}ms, interim_stall_commit=${ASR_INTERIM_STALL_COMMIT_MS}ms`);
-const ttsAuthResolved = getTtsAuth();
-log.info(`TTS: resource=${ttsAuthResolved.resourceId}, auth=AppId+AccessKey(${ttsAuthResolved.appId})`);
-if (VISION_LLM_API_KEY) {
+if (!hasDoubaoCredentials && process.env.GEMINI_API_KEY) {
   log.info(
-    `Vision LLM: ${VISION_LLM_MODEL}${VISION_LLM_RETRY_MODEL !== VISION_LLM_MODEL ? ` (retry: ${VISION_LLM_RETRY_MODEL})` : ""}, max_tokens=${VISION_LLM_MAX_TOKENS}`,
+    `Doubao credentials not configured — delegating voice relay on port ${RELAY_PORT} to Gemini Live voice relay`,
   );
-}
-logRelayLlmStartup();
-log.info(`Listening on ws://localhost:${RELAY_PORT}`);
-
-wss.on("connection", (browserWs) => {
-  log.info("Browser connected, waiting for init...");
-
-  const timeout = setTimeout(() => {
-    log.error("No init message received within 10s");
-    browserWs.close();
-  }, 10000);
-
-  const handler = (data: Buffer) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.type === "mic_test") {
-        clearTimeout(timeout);
-        browserWs.removeListener("message", handler);
-        handleMicTestConnection(browserWs);
-      } else if (msg.type === "init" && msg.context) {
-        clearTimeout(timeout);
-        browserWs.removeListener("message", handler);
-        handleBrowserConnection(browserWs, msg.context as InterviewContext);
-      }
-    } catch {
-      // Not JSON, ignore
+  process.env.GEMINI_VOICE_RELAY_PORT = String(RELAY_PORT);
+  void import("./gemini-voice-relay");
+} else {
+  const wss = new WebSocketServer({ port: RELAY_PORT });
+  wss.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      log.warn(`Port ${RELAY_PORT} is already in use — another voice relay instance is running.`);
+      process.exit(0);
     }
-  };
-  browserWs.on("message", handler);
-});
+    log.error("WebSocketServer error:", err);
+  });
+  log.info(`ASR: resource=${ASR_RESOURCE_ID}, auth=X-Api-Key(${ASR_API_KEY.slice(0, 8)}...)`);
+  log.info(`ASR VAD: end_window_size=${ASR_END_WINDOW_MS}ms, force_to_speech=${ASR_FORCE_SPEECH_MS}ms`);
+  log.info(`ASR final coalescing: normal=${ASR_FINAL_COALESCE_MS}ms, long=${ASR_LONG_FINAL_COALESCE_MS}ms, quiet=${ASR_PENDING_FINAL_QUIET_MS}ms, active_speech_hold=${ASR_ACTIVE_SPEECH_HOLD_MS}ms, max_active_hold=${ASR_MAX_ACTIVE_SPEECH_HOLD_MS}ms, session_max_speech=${ASR_SESSION_MAX_CONTINUOUS_SPEECH_MS}ms, stuck_rotate=${ASR_STUCK_TEXT_ROTATE_MS}ms, interim_stall_commit=${ASR_INTERIM_STALL_COMMIT_MS}ms`);
+  const ttsAuthResolved = getTtsAuth();
+  log.info(`TTS: resource=${ttsAuthResolved.resourceId}, auth=AppId+AccessKey(${ttsAuthResolved.appId})`);
+  if (VISION_LLM_API_KEY) {
+    log.info(
+      `Vision LLM: ${VISION_LLM_MODEL}${VISION_LLM_RETRY_MODEL !== VISION_LLM_MODEL ? ` (retry: ${VISION_LLM_RETRY_MODEL})` : ""}, max_tokens=${VISION_LLM_MAX_TOKENS}`,
+    );
+  }
+  logRelayLlmStartup();
+  log.info(`Listening on ws://localhost:${RELAY_PORT}`);
+
+  wss.on("connection", (browserWs) => {
+    log.info("Browser connected, waiting for init...");
+
+    const timeout = setTimeout(() => {
+      log.error("No init message received within 10s");
+      browserWs.close();
+    }, 10000);
+
+    const handler = (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "mic_test") {
+          clearTimeout(timeout);
+          browserWs.removeListener("message", handler);
+          handleMicTestConnection(browserWs);
+        } else if (msg.type === "init" && msg.context) {
+          clearTimeout(timeout);
+          browserWs.removeListener("message", handler);
+          handleBrowserConnection(browserWs, msg.context as InterviewContext);
+        }
+      } catch {
+        // Not JSON, ignore
+      }
+    };
+    browserWs.on("message", handler);
+  });
+}
 
 // ── Mic test handler (ASR-only, no LLM/TTS) ────────────────────────
 

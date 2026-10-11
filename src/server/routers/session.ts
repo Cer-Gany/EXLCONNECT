@@ -541,7 +541,19 @@ export const sessionRouter = router({
       z.object({
         sessionId: z.string(),
         violation: z.object({
-          type: z.enum(["page_departure", "paste", "multi_screen", "tab_switch", "focus_lost", "copy", "cut"]),
+          type: z.enum([
+            "page_departure",
+            "paste",
+            "multi_screen",
+            "tab_switch",
+            "focus_lost",
+            "copy",
+            "cut",
+            "multiple_faces",
+            "face_not_visible",
+            "looking_away",
+            "prohibited_object",
+          ]),
           timestamp: z.number(),
           detail: z.string().optional(),
         }),

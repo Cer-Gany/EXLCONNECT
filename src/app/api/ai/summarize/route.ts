@@ -1,5 +1,6 @@
 import { svgDataUrlToPng } from "@/lib/ai/convert-svg";
 import { extractJson } from "@/lib/ai/extract-json";
+import { generateChatWithFallback } from "@/lib/ai/generator-run";
 import { createLogger } from "@/lib/logger";
 import { buildSummaryPrompt } from "@/lib/ai/prompts/summary";
 import { getProvider, REPORT_MODEL } from "@/lib/ai/registry";
@@ -129,14 +130,20 @@ export async function POST(req: Request) {
           textOnlyDrawings,
           codeInput,
         );
-        response = await provider.generateResponse({
+        response = await generateChatWithFallback({
           messages: fallbackMessages,
           temperature: 0.3,
           maxTokens: 8192,
           model: REPORT_MODEL,
         });
       } else {
-        throw err;
+        log.warn("Primary summary provider failed, falling back to generator chain:", err);
+        response = await generateChatWithFallback({
+          messages,
+          temperature: 0.3,
+          maxTokens: 8192,
+          model: REPORT_MODEL,
+        });
       }
     }
 

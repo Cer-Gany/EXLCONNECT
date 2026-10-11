@@ -141,12 +141,13 @@ export async function GET(req: Request) {
     }
 
     const root = path.resolve(
+      /*turbopackIgnore: true*/
       process.env.LOCAL_RECORDINGS_DIR ||
-        path.join(process.cwd(), "recordings"),
+        path.join(/*turbopackIgnore: true*/ process.cwd(), "recordings"),
     );
 
-    const sessionDirectory = path.resolve(root, sessionId);
-    const filePath = path.resolve(sessionDirectory, filename);
+    const sessionDirectory = path.resolve(/*turbopackIgnore: true*/ root, sessionId);
+    const filePath = path.resolve(/*turbopackIgnore: true*/ sessionDirectory, filename);
 
     if (
       !sessionDirectory.startsWith(`${root}${path.sep}`) ||
@@ -158,7 +159,7 @@ export async function GET(req: Request) {
     let fileInfo;
 
     try {
-      fileInfo = await stat(filePath);
+      fileInfo = await stat(/*turbopackIgnore: true*/ filePath);
     } catch {
       return errorResponse("Recording not found on this server", 404);
     }
@@ -262,7 +263,7 @@ export async function GET(req: Request) {
       return new Response(null, { status, headers });
     }
 
-    const stream = createReadStream(filePath, { start, end });
+    const stream = createReadStream(/*turbopackIgnore: true*/ filePath, { start, end });
 
     return new Response(Readable.toWeb(stream) as ReadableStream, {
       status,

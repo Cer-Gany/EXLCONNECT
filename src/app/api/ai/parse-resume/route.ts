@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import { getAuthUser } from "@/lib/auth";
+import { streamGeneratorWithFallback } from "@/lib/ai/generator-run";
 import { createLogger } from "@/lib/logger";
 const log = createLogger("api/ai/parse-resume");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -28,28 +28,6 @@ Rules:
 - For education, map the highest degree to one of the exact options listed
 - Extract ALL contact info including email and phone carefully
 - Return ONLY the JSON object, no markdown fences, no explanation`;
-
-function getClient(): { client: OpenAI; model: string } {
-  if (process.env.MINIMAX_API_KEY) {
-    return {
-      client: new OpenAI({
-        apiKey: process.env.MINIMAX_API_KEY,
-        baseURL: process.env.MINIMAX_BASE_URL ?? "https://api.minimax.chat/v1",
-      }),
-      model: "MiniMax-Text-01",
-    };
-  }
-  if (process.env.KIMI_API_KEY) {
-    return {
-      client: new OpenAI({
-        apiKey: process.env.KIMI_API_KEY,
-        baseURL: process.env.KIMI_BASE_URL ?? "https://api.moonshot.cn/v1",
-      }),
-      model: "moonshot-v1-32k",
-    };
-  }
-  throw new Error("No LLM provider configured");
-}
 
 export async function POST(req: Request) {
   try {
@@ -82,11 +60,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { client, model } = getClient();
-
-    // Stream the LLM response via SSE
-    const stream = await client.chat.completions.create({
-      model,
+    const stream = streamGeneratorWithFallback({
       messages: [
         {
           role: "system",
@@ -98,16 +72,14 @@ export async function POST(req: Request) {
         },
       ],
       temperature: 0.1,
-      max_tokens: 1024,
-      stream: true,
+      maxTokens: 1024,
     });
 
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of stream) {
-            const token = chunk.choices[0]?.delta?.content;
+          for await (const token of stream) {
             if (token) {
               controller.enqueue(
                 encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),

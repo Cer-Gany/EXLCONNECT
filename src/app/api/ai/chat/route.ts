@@ -1,3 +1,4 @@
+import { generateChatWithFallback } from "@/lib/ai/generator-run";
 import { buildInterviewerPrompt } from "@/lib/ai/prompts/interviewer";
 import { getProvider } from "@/lib/ai/registry";
 import type { LLMMessage } from "@/lib/ai/types";
@@ -48,12 +49,22 @@ export async function POST(req: Request) {
       currentQuestionIndex: currentQuestionIndex ?? 0,
     });
 
-    const response = await provider.generateResponse({
-      messages: promptMessages,
-      temperature: 0.7,
-      maxTokens: 1024,
-      model: interview.llmModel ?? undefined,
-    });
+    let response;
+    try {
+      response = await provider.generateResponse({
+        messages: promptMessages,
+        temperature: 0.7,
+        maxTokens: 1024,
+        model: interview.llmModel ?? undefined,
+      });
+    } catch (primaryErr) {
+      log.warn("Primary chat provider failed, falling back to generator chain:", primaryErr);
+      response = await generateChatWithFallback({
+        messages: promptMessages,
+        temperature: 0.7,
+        maxTokens: 1024,
+      });
+    }
 
     const isComplete = response.content.includes("[INTERVIEW_COMPLETE]");
     let questionAdvanced = response.content.includes("[NEXT_QUESTION]");

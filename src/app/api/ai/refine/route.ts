@@ -1,5 +1,6 @@
 import { getAuthUser } from "@/lib/auth";
-import { getProvider, GENERATOR_MODEL } from "@/lib/ai/registry";
+import { streamGeneratorWithFallback } from "@/lib/ai/generator-run";
+import { GENERATOR_MODEL } from "@/lib/ai/registry";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/ai/refine");
@@ -30,7 +31,6 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: "Interview and feedback are required" }), { status: 400 });
   }
 
-  const provider = getProvider(GENERATOR_MODEL);
   const messages = buildImprovePrompt(interview, feedback, language, jobDescription, resumeText);
 
   const encoder = new TextEncoder();
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
       const collectLlmContent = async (streamToClient: boolean) => {
         let inThink = false;
         let fullContent = "";
-        for await (const chunk of provider.streamResponse({
+        for await (const chunk of streamGeneratorWithFallback({
           messages,
           temperature: 0.7,
           maxTokens: 8192,

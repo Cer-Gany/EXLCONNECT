@@ -1098,7 +1098,15 @@ function SessionDetail({
                                 ? "External paste blocked"
                                 : v.type === "multi_screen"
                                   ? "Multi-screen detected"
-                                  : v.type;
+                                  : v.type === "multiple_faces"
+                                    ? "Multiple faces detected"
+                                    : v.type === "face_not_visible"
+                                      ? "Candidate face not visible"
+                                      : v.type === "looking_away"
+                                        ? "Looking away from screen"
+                                        : v.type === "prohibited_object"
+                                          ? "Prohibited object detected"
+                                          : v.type;
 
                       const eventTime = new Date(v.timestamp);
 

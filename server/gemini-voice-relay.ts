@@ -424,6 +424,13 @@ const GEMINI_TOOLS = [
 // ── Relay server ────────────────────────────────────────────────────
 
 const wss = new WebSocketServer({ port: RELAY_PORT });
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    log.warn(`Port ${RELAY_PORT} is already in use — another voice relay instance is running.`);
+    process.exit(0);
+  }
+  log.error("WebSocketServer error:", err);
+});
 
 log.info(`Gemini voice relay listening on ws://localhost:${RELAY_PORT}`);
 log.info(`Gemini Live model: ${GEMINI_LIVE_MODEL} (voice=${GEMINI_VOICE})`);

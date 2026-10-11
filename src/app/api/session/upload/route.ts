@@ -101,21 +101,22 @@ export async function POST(req: Request) {
 
     if (isLocalRecording) {
       const root = path.resolve(
-        process.env.LOCAL_RECORDINGS_DIR || path.join(process.cwd(), "recordings"),
+        /*turbopackIgnore: true*/
+        process.env.LOCAL_RECORDINGS_DIR || path.join(/*turbopackIgnore: true*/ process.cwd(), "recordings"),
       );
-      const sessionDirectory = path.resolve(root, sessionId);
+      const sessionDirectory = path.resolve(/*turbopackIgnore: true*/ root, sessionId);
 
       if (!sessionDirectory.startsWith(`${root}${path.sep}`)) {
         return NextResponse.json({ error: "Invalid recording path" }, { status: 400 });
       }
 
-      await mkdir(sessionDirectory, { recursive: true });
+      await mkdir(/*turbopackIgnore: true*/ sessionDirectory, { recursive: true });
 
-      const destination = path.join(sessionDirectory, filename);
+      const destination = path.join(/*turbopackIgnore: true*/ sessionDirectory, filename);
       const buffer = Buffer.from(await file.arrayBuffer());
 
       // wx prevents accidentally overwriting an existing recording.
-      await writeFile(destination, buffer, { flag: "wx" });
+      await writeFile(/*turbopackIgnore: true*/ destination, buffer, { flag: "wx" });
 
       const url = `/api/session/local-recording?sessionId=${encodeURIComponent(sessionId)}&filename=${encodeURIComponent(filename)}`;
 

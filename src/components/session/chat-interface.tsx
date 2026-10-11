@@ -158,6 +158,7 @@ export function ChatInterface({
 
   const currentQuestionTimeLimit =
     interview.questions[currentQuestion]?.timeLimitSeconds ?? null;
+  const currentQuestionType = interview.questions[currentQuestion]?.type;
 
   useEffect(() => {
     if (preview) return;
@@ -166,9 +167,9 @@ export function ChatInterface({
 
     // Fallback for older questions that don't have an AI-generated limit.
     const fallbackSeconds =
-      interview.questions[currentQuestion]?.type === "CODING"
+      currentQuestionType === "CODING"
         ? 300
-        : interview.questions[currentQuestion]?.type === "WHITEBOARD"
+        : currentQuestionType === "WHITEBOARD"
           ? 300
           : 90;
 
@@ -177,7 +178,7 @@ export function ChatInterface({
         ? currentQuestionTimeLimit
         : fallbackSeconds,
     );
-  }, [currentQuestion, currentQuestionTimeLimit, preview]);
+  }, [currentQuestion, currentQuestionTimeLimit, currentQuestionType, preview]);
 
   useEffect(() => {
     if (
@@ -220,6 +221,7 @@ export function ChatInterface({
     } else {
       void handleFinishInterview();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     questionRemainingSeconds,
     currentQuestion,
