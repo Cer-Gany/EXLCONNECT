@@ -49,6 +49,7 @@ export const VOICE_TOUR_STEPS: IntervieweeTourStep[] = [
     description:
       "Your full conversation transcript appears here. Use it to review what was said.",
     placement: "left",
+    optional: true,
   },
   {
     id: "voice-progress",

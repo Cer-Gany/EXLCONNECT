@@ -1792,6 +1792,7 @@ export function VoiceInterface({
     userTranscript: "",
     aiTranscript: "",
     activeTool: "voice" as "voice" | "whiteboard" | "code",
+    messages: [] as Message[],
   });
 
   useEffect(() => {
@@ -1814,6 +1815,7 @@ export function VoiceInterface({
         : codeEditorActive
           ? "code"
           : "voice",
+      messages,
     };
   }, [
     showVoiceTransitioning,
@@ -1826,6 +1828,7 @@ export function VoiceInterface({
     voice.aiTranscript,
     whiteboardActive,
     codeEditorActive,
+    messages,
   ]);
 
   useEffect(() => {
@@ -1866,6 +1869,12 @@ export function VoiceInterface({
         aiTranscript: s.aiTranscript,
         activeTool: s.activeTool,
         codeSnippet,
+        messages: s.messages.slice(-80).map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          source: m.source,
+        })),
       });
     };
 
@@ -2046,11 +2055,6 @@ export function VoiceInterface({
                     {voice.isConnected
                       ? `Voice active — ${whiteboardActive ? "draw" : "code"} freely`
                       : "Voice disconnected"}
-                  </span>
-                )}
-                {showVoiceListening && voice.userTranscript && (
-                  <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground italic">
-                    &ldquo;{voice.userTranscript}&rdquo;
                   </span>
                 )}
               </div>
@@ -2366,15 +2370,6 @@ export function VoiceInterface({
                       <Loader2 className="h-5 w-5 animate-spin" />
                       <span className="text-sm font-medium">Thinking...</span>
                     </div>
-                    {(() => {
-                      const lastUserMsg = messages.filter(m => m.role === "user").pop();
-                      const displayText = lastUserMsg?.content || voice.userTranscript;
-                      return displayText ? (
-                        <p className="max-w-md text-center text-sm text-muted-foreground">
-                          &ldquo;{displayText}&rdquo;
-                        </p>
-                      ) : null;
-                    })()}
                   </div>
                 )}
                 {showVoiceSpeaking && (
@@ -2399,13 +2394,6 @@ export function VoiceInterface({
                   </div>
                 )}
 
-                {/* Live transcript while listening */}
-                {showVoiceListening && voice.userTranscript && (
-                  <p className="max-w-md text-center text-sm text-muted-foreground">
-                    &ldquo;{voice.userTranscript}&rdquo;
-                  </p>
-                )}
-
                 {/* Audio waveform — driven by real audio level */}
                 {(showVoiceSpeaking || showVoiceListening) && (
                   <div className="flex items-center gap-1">
@@ -2425,15 +2413,6 @@ export function VoiceInterface({
                       );
                     })}
                   </div>
-                )}
-
-                {/* AI response text */}
-                {voice.aiTranscript && !showVoiceListening && (
-                  <p className="max-w-md text-center text-sm text-muted-foreground italic">
-                    {voice.aiTranscript.length > 200
-                      ? voice.aiTranscript.slice(0, 200) + "..."
-                      : voice.aiTranscript}
-                  </p>
                 )}
               </div>
 
@@ -2484,16 +2463,16 @@ export function VoiceInterface({
               )}
               </div>
 
-              {/* Mobile: draggable divider between voice and transcript */}
-              {isMobile && !mobileTranscriptCollapsed && (
+              {/* Mobile: draggable divider between voice and transcript (hidden for candidate) */}
+              {false && isMobile && !mobileTranscriptCollapsed && (
                 <div
                   className="group flex h-1 shrink-0 cursor-row-resize items-center justify-center border-t border-b border-border bg-muted/30 transition-colors hover:bg-primary/10 active:bg-primary/20 touch-none"
                   onPointerDown={handleVoiceTranscriptSplitDown}
                 />
               )}
 
-              {/* Mobile: transcript below voice when no whiteboard/code editor */}
-              {isMobile && (
+              {/* Mobile: transcript below voice (hidden for candidate; visible only on recruiter dashboard) */}
+              {false && isMobile && (
                 <div
                   className={
                     mobileTranscriptCollapsed
@@ -2603,16 +2582,16 @@ export function VoiceInterface({
           )}
         </div>
 
-        {/* ── Draggable divider (desktop only) ────────────────── */}
-        {!isMobile && !desktopTranscriptCollapsed && (
+        {/* ── Draggable divider (hidden for candidate; transcript/chat is recruiter-only) ── */}
+        {false && !isMobile && !desktopTranscriptCollapsed && (
           <div
             className="group flex w-1 cursor-col-resize touch-none items-center justify-center border-l border-r border-border bg-muted/30 transition-colors hover:bg-primary/10 active:bg-primary/20"
             onPointerDown={onDragStart}
           />
         )}
 
-        {/* ── Right panel — Transcript + optional Chat (desktop only) ── */}
-        {!isMobile && (
+        {/* ── Right panel — Transcript + Chat (hidden for candidate; recruiter-only) ── */}
+        {false && !isMobile && (
         <div
           ref={rightPanelRef}
           className="flex min-h-0 shrink-0 flex-col border-l bg-card"
@@ -2846,8 +2825,8 @@ export function VoiceInterface({
             </span>
           </div>
 
-          {/* Chat toggle (mobile: opens transcript+chat sheet; same layout as other icon buttons) */}
-          {chatEnabled && (
+          {/* Chat toggle (hidden for candidate; chat/transcript is recruiter-only) */}
+          {false && chatEnabled && (
             <div data-tour="voice-chat" className="flex flex-col items-center gap-0.5">
               <Button
                 size="icon"
@@ -2984,8 +2963,8 @@ export function VoiceInterface({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ── Mobile transcript + chat sheet (replaces separate transcript button) ── */}
-      {isMobile && chatEnabled && (
+      {/* ── Mobile transcript + chat sheet (hidden for candidate; recruiter-only) ── */}
+      {false && isMobile && chatEnabled && (
         <Sheet open={chatOpen} onOpenChange={setChatOpen}>
           <SheetContent
             side="bottom"

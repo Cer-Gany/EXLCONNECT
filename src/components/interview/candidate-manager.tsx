@@ -1307,6 +1307,16 @@ export function CandidateManager({
                             >
                               <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
                             </Button>
+                          ) : hasSession && status === "IN_PROGRESS" ? (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+                              title="Watch live interview"
+                              onClick={() => onViewSession(session.id)}
+                            >
+                              <PlayCircle className="h-3.5 w-3.5" />
+                            </Button>
                           ) : showReopen ? (
                             <Button
                               variant="ghost"

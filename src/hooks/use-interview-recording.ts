@@ -173,54 +173,121 @@ export function useInterviewRecording({
   useEffect(() => { cameraStreamRef.current = cameraStream; }, [cameraStream]);
   useEffect(() => { screenStreamRef.current = screenStream; }, [screenStream]);
 
-  /** Acquire camera and screen streams, reusing stored streams from onboarding. */
-  const acquireStreams = useCallback(async () => {
-    // Reuse camera stream from onboarding if still active
-    const storedCam = getStoredCameraStream();
-    if (storedCam) {
-      setCameraStream(storedCam);
-      cameraStreamRef.current = storedCam;
-      setStoredCameraStream(null);
-    } else if (!wasCameraSkipped()) {
-      try {
-        const cam = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 640, height: 480 },
-        });
-        setCameraStream(cam);
-        cameraStreamRef.current = cam;
-      } catch (err) {
-        log.warn("Camera not available:", err);
+  const bindHiddenVideos = useCallback(() => {
+    if (typeof document === "undefined") return;
+    const setupEl = () => {
+      const v = document.createElement("video");
+      v.muted = true;
+      v.playsInline = true;
+      v.autoplay = true;
+      v.style.position = "fixed";
+      v.style.top = "0";
+      v.style.left = "0";
+      v.style.width = "2px";
+      v.style.height = "2px";
+      v.style.opacity = "0";
+      v.style.pointerEvents = "none";
+      v.style.zIndex = "-1";
+      document.body.appendChild(v);
+      return v;
+    };
+
+    if (cameraStreamRef.current) {
+      if (!cameraVideoRef.current) {
+        cameraVideoRef.current = setupEl();
+      }
+      if (cameraVideoRef.current.srcObject !== cameraStreamRef.current) {
+        cameraVideoRef.current.srcObject = cameraStreamRef.current;
+        cameraVideoRef.current.play().catch(() => {});
       }
     }
 
-    // Reuse screen stream from onboarding if still active
+    if (screenStreamRef.current) {
+      if (!screenVideoRef.current) {
+        screenVideoRef.current = setupEl();
+      }
+      if (screenVideoRef.current.srcObject !== screenStreamRef.current) {
+        screenVideoRef.current.srcObject = screenStreamRef.current;
+        screenVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, []);
+
+  /** Acquire camera and screen streams, reusing stored streams from onboarding. */
+  const acquireStreams = useCallback(async () => {
+    if (!cameraStreamRef.current || !cameraStreamRef.current.active) {
+      const storedCam = getStoredCameraStream();
+      if (storedCam) {
+        setCameraStream(storedCam);
+        cameraStreamRef.current = storedCam;
+        setStoredCameraStream(null);
+      } else if (!wasCameraSkipped()) {
+        try {
+          const cam = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: 640, height: 480 },
+          });
+          setCameraStream(cam);
+          cameraStreamRef.current = cam;
+        } catch (err) {
+          log.warn("Camera not available:", err);
+        }
+      }
+    }
+
+    if (!screenStreamRef.current || !screenStreamRef.current.active) {
+      const storedScreen = getStoredScreenStream();
+      if (storedScreen) {
+        setScreenStream(storedScreen);
+        screenStreamRef.current = storedScreen;
+        setStoredScreenStream(null);
+
+        storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
+          setScreenStream(null);
+          screenStreamRef.current = null;
+        });
+      } else if (!wasScreenSkipped()) {
+        try {
+          const screen = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+          });
+          setScreenStream(screen);
+          screenStreamRef.current = screen;
+
+          screen.getVideoTracks()[0]?.addEventListener("ended", () => {
+            setScreenStream(null);
+            screenStreamRef.current = null;
+          });
+        } catch (err) {
+          log.warn("Screen share not available:", err);
+        }
+      }
+    }
+
+    bindHiddenVideos();
+  }, [bindHiddenVideos]);
+
+  // Immediately adopt any streams already authorized during onboarding so
+  // live recruiter monitoring works as soon as the session page mounts.
+  useEffect(() => {
+    if (!enabled) return;
+    const storedCam = getStoredCameraStream();
+    if (storedCam && !cameraStreamRef.current) {
+      setCameraStream(storedCam);
+      cameraStreamRef.current = storedCam;
+      setStoredCameraStream(null);
+    }
     const storedScreen = getStoredScreenStream();
-    if (storedScreen) {
+    if (storedScreen && !screenStreamRef.current) {
       setScreenStream(storedScreen);
       screenStreamRef.current = storedScreen;
       setStoredScreenStream(null);
-
       storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
         setScreenStream(null);
         screenStreamRef.current = null;
       });
-    } else if (!wasScreenSkipped()) {
-      try {
-        const screen = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-        });
-        setScreenStream(screen);
-        screenStreamRef.current = screen;
-
-        screen.getVideoTracks()[0]?.addEventListener("ended", () => {
-          setScreenStream(null);
-          screenStreamRef.current = null;
-        });
-      } catch (err) {
-        log.warn("Screen share not available:", err);
-      }
     }
-  }, []);
+    bindHiddenVideos();
+  }, [enabled, bindHiddenVideos]);
 
   /** Start continuous screen video recording using the already-acquired screen stream. */
   const startCameraRecording = useCallback(() => {
@@ -562,37 +629,10 @@ export function useInterviewRecording({
       startCameraRecording();
       startScreenRecording();
 
-      // Set up hidden video elements for screenshot capture
-      if (!cameraVideoRef.current) {
-        const v = document.createElement("video");
-        v.muted = true;
-        v.playsInline = true;
-        v.style.display = "none";
-        document.body.appendChild(v);
-        cameraVideoRef.current = v;
-      }
-      if (!screenVideoRef.current) {
-        const v = document.createElement("video");
-        v.muted = true;
-        v.playsInline = true;
-        v.style.display = "none";
-        document.body.appendChild(v);
-        screenVideoRef.current = v;
-      }
-
-      // Bind streams to hidden video elements for canvas capture
-      const bindStream = (video: HTMLVideoElement, stream: MediaStream | null) => {
-        if (stream) {
-          video.srcObject = stream;
-          video.play().catch(() => {});
-        }
-      };
-      // Use refs (set in acquireStreams via state update + useEffect sync)
-      // Small delay to let state sync
+      // Bind streams to offscreen hidden video elements for canvas capture
       setTimeout(() => {
-        bindStream(cameraVideoRef.current!, cameraStreamRef.current);
-        bindStream(screenVideoRef.current!, screenStreamRef.current);
-      }, 500);
+        bindHiddenVideos();
+      }, 300);
 
       // Start periodic screenshot timer
       screenshotTimerRef.current = setInterval(() => { void takeScreenshots(); }, screenshotIntervalMs);
@@ -607,6 +647,7 @@ export function useInterviewRecording({
       attachMicStream,
       startCameraRecording,
       startScreenRecording,
+      bindHiddenVideos,
       takeScreenshots,
       screenshotIntervalMs,
     ],

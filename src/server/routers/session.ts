@@ -877,6 +877,17 @@ export const sessionRouter = router({
             code: z.string().max(50_000),
           })
           .optional(),
+        messages: z
+          .array(
+            z.object({
+              id: z.string(),
+              role: z.enum(["user", "assistant"]),
+              content: z.string().max(8000),
+              source: z.enum(["voice", "chat"]).optional(),
+            }),
+          )
+          .max(200)
+          .optional(),
       }),
     )
     .mutation(({ input }) => {
@@ -890,8 +901,9 @@ export const sessionRouter = router({
         }
       }
 
-      const prev = store.get(input.sessionId);
-      store.set(input.sessionId, {
+      const prev =
+        store.get(input.sessionId) ?? readLiveSessionFromDisk(input.sessionId);
+      const nextState: LiveSessionState = {
         sessionId: input.sessionId,
         cameraFrame: input.cameraFrame ?? prev?.cameraFrame,
         screenFrame: input.screenFrame ?? prev?.screenFrame,
@@ -904,8 +916,11 @@ export const sessionRouter = router({
         aiTranscript: input.aiTranscript ?? prev?.aiTranscript ?? "",
         activeTool: input.activeTool ?? prev?.activeTool ?? "voice",
         codeSnippet: input.codeSnippet ?? prev?.codeSnippet,
+        messages: input.messages ?? prev?.messages ?? [],
         updatedAt: now,
-      });
+      };
+      store.set(input.sessionId, nextState);
+      writeLiveSessionToDisk(nextState);
 
       return { ok: true };
     }),
@@ -914,8 +929,19 @@ export const sessionRouter = router({
     .input(z.object({ sessionId: z.string() }))
     .query(({ input }) => {
       const store = getLiveSessionStore();
-      const entry = store.get(input.sessionId);
+      const memEntry = store.get(input.sessionId);
+      const diskEntry =
+        !memEntry || Date.now() - memEntry.updatedAt > 2000
+          ? readLiveSessionFromDisk(input.sessionId)
+          : null;
+      const entry =
+        diskEntry && (!memEntry || diskEntry.updatedAt >= memEntry.updatedAt)
+          ? diskEntry
+          : memEntry;
       if (!entry) return null;
+      if (diskEntry && entry === diskEntry) {
+        store.set(input.sessionId, diskEntry);
+      }
       // Consider live feed active if updated within the last 30 seconds
       const isLive = Date.now() - entry.updatedAt < 30_000;
       return {
@@ -924,6 +950,13 @@ export const sessionRouter = router({
       };
     }),
 });
+
+export interface LiveSessionMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  source?: "voice" | "chat";
+}
 
 export interface LiveSessionState {
   sessionId: string;
@@ -936,6 +969,7 @@ export interface LiveSessionState {
   aiTranscript: string;
   activeTool: "voice" | "whiteboard" | "code" | "chat";
   codeSnippet?: { language: string; code: string };
+  messages?: LiveSessionMessage[];
   updatedAt: number;
 }
 
@@ -952,4 +986,45 @@ function getLiveSessionStore(): Map<string, LiveSessionState> {
   }
   return globalForLiveSessions.__liveSessionStates;
 }
+
+function getLiveSessionFilePath(sessionId: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require("node:path") as typeof import("node:path");
+  const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(os.tmpdir(), "exlconnect-live-sessions", `${safeId}.json`);
+}
+
+function writeLiveSessionToDisk(state: LiveSessionState): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs") as typeof import("node:fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("node:path") as typeof import("node:path");
+    const filePath = getLiveSessionFilePath(state.sessionId);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(state), "utf8");
+  } catch {
+    // Ignore disk cache errors
+  }
+}
+
+function readLiveSessionFromDisk(sessionId: string): LiveSessionState | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs") as typeof import("node:fs");
+    const filePath = getLiveSessionFilePath(sessionId);
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as LiveSessionState;
+    if (Date.now() - parsed.updatedAt > 90_000) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 

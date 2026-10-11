@@ -454,8 +454,10 @@ function SessionDetail({
   const summary = trpc.analysis.getSessionSummary.useQuery(
     { sessionId },
     {
-      refetchInterval: (query) =>
-        query.state.data?.status === "IN_PROGRESS" ? 2500 : false,
+      refetchInterval: (data: any, query?: any) =>
+        (data?.status ?? query?.state?.data?.status) === "IN_PROGRESS"
+          ? 2500
+          : false,
     },
   );
   const isOngoing = summary.data?.status === "IN_PROGRESS";
@@ -542,7 +544,7 @@ function SessionDetail({
       summary.data &&
       summary.data.status === "COMPLETED" &&
       !summary.data.summary &&
-      summary.data.messages.length > 0
+      (summary.data.messages?.length ?? 0) > 0
     ) {
       autoTriggered.current = true;
       handleGenerateSummary();
@@ -1063,27 +1065,108 @@ function SessionDetail({
                       </div>
                     </div>
 
-                    {/* Live real-time captions while speaking */}
-                    {(liveState?.userTranscript || liveState?.aiTranscript) && (
-                      <div className="space-y-2 rounded-lg border bg-card/90 p-3 text-xs">
-                        {liveState.aiTranscript && (
-                          <p className="text-muted-foreground">
-                            <span className="font-semibold text-foreground">
-                              Interviewer (Live):{" "}
+                    {/* Live Chat & Conversation Transcript (Recruiter Only) */}
+                    {(() => {
+                      const dbMessages = (summary.data?.messages ?? [])
+                        .filter(
+                          (m: any) =>
+                            m.contentType !== "WHITEBOARD" &&
+                            (m.contentType as string) !== "CODE",
+                        )
+                        .map((m: any) => ({
+                          id: String(m.id),
+                          role: m.role === "USER" ? ("user" as const) : ("assistant" as const),
+                          content: String(m.content ?? ""),
+                          source: m.transcription === "chat" ? ("chat" as const) : ("voice" as const),
+                        }));
+                      const liveMessages =
+                        liveState?.messages && liveState.messages.length >= dbMessages.length
+                          ? liveState.messages
+                          : dbMessages;
+
+                      return (
+                        <div className="overflow-hidden rounded-lg border bg-card">
+                          <div className="flex items-center justify-between border-b bg-muted/40 px-3.5 py-2">
+                            <span className="flex items-center gap-2 text-xs font-semibold">
+                              <MessageCircle className="h-3.5 w-3.5 text-emerald-500" />
+                              Live Chat &amp; Conversation (Recruiter Only)
                             </span>
-                            {liveState.aiTranscript}
-                          </p>
-                        )}
-                        {liveState.userTranscript && (
-                          <p className="text-muted-foreground">
-                            <span className="font-semibold text-primary">
-                              Candidate (Live):{" "}
-                            </span>
-                            {liveState.userTranscript}
-                          </p>
-                        )}
-                      </div>
-                    )}
+                            <Badge variant="secondary" className="text-[10px]">
+                              {liveMessages.length}{" "}
+                              {liveMessages.length === 1 ? "message" : "messages"}
+                            </Badge>
+                          </div>
+                          <ScrollArea className="h-64">
+                            <div className="space-y-3 p-3.5">
+                              {liveMessages.length === 0 &&
+                                !liveState?.aiTranscript &&
+                                !liveState?.userTranscript && (
+                                  <p className="py-8 text-center text-xs text-muted-foreground">
+                                    Live conversation will appear here as the interview progresses...
+                                  </p>
+                                )}
+                              {liveMessages.map((msg) => {
+                                const isUser = msg.role === "user";
+                                return (
+                                  <div
+                                    key={msg.id}
+                                    className={`flex gap-2.5 ${isUser ? "flex-row-reverse" : ""}`}
+                                  >
+                                    <div
+                                      className={`max-w-[78%] rounded-lg px-3.5 py-2 text-xs ${
+                                        isUser
+                                          ? "bg-primary text-primary-foreground"
+                                          : "bg-secondary-100 dark:bg-secondary text-secondary-900 dark:text-secondary-foreground"
+                                      }`}
+                                    >
+                                      <div className="mb-0.5 flex items-center gap-1.5 font-semibold opacity-80">
+                                        {isUser ? (
+                                          msg.source === "chat" ? (
+                                            <MessageSquare className="h-3 w-3" />
+                                          ) : (
+                                            <Mic className="h-3 w-3" />
+                                          )
+                                        ) : (
+                                          <Volume2 className="h-3 w-3" />
+                                        )}
+                                        <span>{isUser ? "Candidate" : "AI Interviewer"}</span>
+                                      </div>
+                                      <p className="leading-relaxed">{msg.content}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              {liveState?.aiTranscript && (
+                                <div className="flex gap-2.5">
+                                  <div className="max-w-[78%] rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3.5 py-2 text-xs">
+                                    <div className="mb-0.5 flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                                      <Volume2 className="h-3 w-3 animate-pulse" />
+                                      <span>AI Interviewer (Speaking Live)</span>
+                                    </div>
+                                    <p className="leading-relaxed text-muted-foreground">
+                                      {liveState.aiTranscript}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                              {liveState?.userTranscript && (
+                                <div className="flex flex-row-reverse gap-2.5">
+                                  <div className="max-w-[78%] rounded-lg border border-primary/30 bg-primary/10 px-3.5 py-2 text-xs">
+                                    <div className="mb-0.5 flex items-center gap-1.5 font-semibold text-primary">
+                                      <Mic className="h-3 w-3 animate-pulse" />
+                                      <span>Candidate (Speaking Live)</span>
+                                    </div>
+                                    <p className="leading-relaxed text-foreground">
+                                      {liveState.userTranscript}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      );
+                    })()}
 
                     {/* Live Code Editor View if candidate is writing code */}
                     {liveState?.codeSnippet?.code && (
@@ -1130,7 +1213,7 @@ function SessionDetail({
                       </p>
                       <Button
                         onClick={handleRequestReport}
-                        disabled={!summary.data?.messages.length}
+                        disabled={!(summary.data?.messages?.length ?? 0)}
                       >
                         <Sparkles className="mr-2 h-4 w-4" />
                         Generate Report
@@ -1852,11 +1935,11 @@ function SessionDetail({
                     <MessageCircle className="h-4 w-4" />
                     Transcript
                     <Badge variant="secondary" className="ml-1 font-normal">
-                      {summary.data?.messages.filter(
+                      {(summary.data?.messages ?? []).filter(
                         (m: any) =>
                           m.contentType !== "WHITEBOARD" &&
                           (m.contentType as string) !== "CODE",
-                      ).length ?? 0}{" "}
+                      ).length}{" "}
                       messages
                     </Badge>
                   </CardTitle>
@@ -1874,12 +1957,12 @@ function SessionDetail({
                     {!pdfCapture ? (
                       <ScrollArea className="h-[500px]">
                         <div className="space-y-4 pr-4">
-                          {summary.data?.messages.length === 0 && (
+                          {(summary.data?.messages ?? []).length === 0 && (
                             <p className="py-8 text-center text-muted-foreground">
                               No messages recorded for this session.
                             </p>
                           )}
-                          {summary.data?.messages
+                          {(summary.data?.messages ?? [])
                             .filter(
                               (m: any) =>
                                 m.contentType !== "WHITEBOARD" &&
@@ -1939,7 +2022,7 @@ function SessionDetail({
                     ) : (
                       /* PDF capture mode: no ScrollArea, render all messages flat */
                       <div className="space-y-4">
-                        {summary.data?.messages
+                        {(summary.data?.messages ?? [])
                           .filter(
                             (m: any) =>
                               m.contentType !== "WHITEBOARD" &&
