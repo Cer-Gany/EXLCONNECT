@@ -5,6 +5,7 @@ import {
     CodeEditorCanvas,
     type CodeEditorCanvasRef,
 } from "@/components/code-editor/code-editor-canvas";
+import { AiInterviewerAvatar } from "@/components/session/ai-interviewer-avatar";
 import { IntervieweeHelpPopover } from "@/components/session/interviewee-help-popover";
 import {
     normalizeSessionEndReason,
@@ -1904,6 +1905,16 @@ export function VoiceInterface({
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Minimized voice status bar */}
               <div className="flex items-center gap-3 border-b bg-card px-4 py-2">
+                <AiInterviewerAvatar
+                  aiName={aiName}
+                  isSpeaking={showVoiceSpeaking}
+                  isListening={showVoiceListening}
+                  isProcessing={showVoiceProcessing || showVoiceTransitioning}
+                  isConnected={voice.isConnected}
+                  ttsAnalyserRef={voice.ttsAnalyserRef}
+                  aiTranscript={voice.aiTranscript}
+                  compact
+                />
                 {showVoiceSpeaking && (
                   <div className="flex items-center gap-1.5 text-primary">
                     <Volume2 className="h-4 w-4 animate-pulse" />
@@ -2238,7 +2249,17 @@ export function VoiceInterface({
                 }
               >
               {/* Status indicator */}
-              <div className="flex flex-col items-center gap-4">
+              <div className="flex flex-col items-center gap-4 px-4">
+                <AiInterviewerAvatar
+                  aiName={aiName}
+                  isSpeaking={showVoiceSpeaking}
+                  isListening={showVoiceListening}
+                  isProcessing={showVoiceProcessing || showVoiceTransitioning}
+                  isConnected={voice.isConnected}
+                  ttsAnalyserRef={voice.ttsAnalyserRef}
+                  aiTranscript={voice.aiTranscript}
+                  className="w-56 h-56 sm:w-64 sm:h-64 md:w-72 md:h-72 shrink-0"
+                />
                 {showVoiceTransitioning && (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin" />

@@ -5,6 +5,7 @@ import {
     CodeEditorCanvas,
     type CodeEditorCanvasRef,
 } from "@/components/code-editor/code-editor-canvas";
+import { AiInterviewerAvatar } from "@/components/session/ai-interviewer-avatar";
 import { IntervieweeHelpPopover } from "@/components/session/interviewee-help-popover";
 import type { SessionEndReasonInput } from "@/components/session/session-ended-screen";
 import {
@@ -1323,13 +1324,28 @@ export function ChatInterface({
         )}
       >
         <div className="flex items-center justify-between">
-          <div className="mr-2 min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold md:text-base">
-              {interview.title}
-            </h1>
-            <p className="hidden text-xs text-muted-foreground md:block">
-              Chat Interview with {interview.aiName}
-            </p>
+          <div className="mr-2 flex min-w-0 flex-1 items-center gap-3">
+            <AiInterviewerAvatar
+              aiName={interview.aiName}
+              isSpeaking={aiTyping}
+              isProcessing={sending && !aiTyping}
+              isListening={!aiTyping && !sending}
+              isConnected
+              aiTranscript={
+                displayMessages
+                  .filter((m) => m.role === "ASSISTANT")
+                  .slice(-1)[0]?.content ?? ""
+              }
+              compact
+            />
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold md:text-base">
+                {interview.title}
+              </h1>
+              <p className="hidden text-xs text-muted-foreground md:block">
+                Chat Interview with {interview.aiName}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {questionRemainingSeconds !== null && (
