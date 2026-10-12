@@ -5,6 +5,7 @@ import {
     CodeEditorCanvas,
     type CodeEditorCanvasRef,
 } from "@/components/code-editor/code-editor-canvas";
+import { AiInterviewerAvatar } from "@/components/session/ai-interviewer-avatar";
 import { IntervieweeHelpPopover } from "@/components/session/interviewee-help-popover";
 import type { SessionEndReasonInput } from "@/components/session/session-ended-screen";
 import {
@@ -28,6 +29,7 @@ import {
     useSessionToolChunkPrefetch,
 } from "@/hooks/use-chunk-load-recovery";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { trpc } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import {
     Check,
@@ -158,6 +160,7 @@ export function ChatInterface({
 
   const currentQuestionTimeLimit =
     interview.questions[currentQuestion]?.timeLimitSeconds ?? null;
+  const currentQuestionType = interview.questions[currentQuestion]?.type;
 
   useEffect(() => {
     if (preview) return;
@@ -166,9 +169,9 @@ export function ChatInterface({
 
     // Fallback for older questions that don't have an AI-generated limit.
     const fallbackSeconds =
-      interview.questions[currentQuestion]?.type === "CODING"
+      currentQuestionType === "CODING"
         ? 300
-        : interview.questions[currentQuestion]?.type === "WHITEBOARD"
+        : currentQuestionType === "WHITEBOARD"
           ? 300
           : 90;
 
@@ -177,7 +180,7 @@ export function ChatInterface({
         ? currentQuestionTimeLimit
         : fallbackSeconds,
     );
-  }, [currentQuestion, currentQuestionTimeLimit, preview]);
+  }, [currentQuestion, currentQuestionTimeLimit, currentQuestionType, preview]);
 
   useEffect(() => {
     if (
@@ -220,6 +223,7 @@ export function ChatInterface({
     } else {
       void handleFinishInterview();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     questionRemainingSeconds,
     currentQuestion,
@@ -1313,6 +1317,85 @@ export function ChatInterface({
       </div>
     ) : null;
 
+  const publishLiveState = trpc.session.publishLiveState.useMutation();
+  const chatLiveSnapshotRef = useRef({
+    aiState: "idle" as "speaking" | "listening" | "thinking" | "idle",
+    currentQuestionIndex: 0,
+    currentQuestionText: "",
+    userTranscript: "",
+    aiTranscript: "",
+    activeTool: "chat" as "chat" | "whiteboard" | "code",
+  });
+
+  useEffect(() => {
+    const lastAssistant = displayMessages
+      .filter((m) => m.role === "ASSISTANT")
+      .slice(-1)[0]?.content ?? "";
+    chatLiveSnapshotRef.current = {
+      aiState: aiTyping
+        ? "speaking"
+        : sending
+          ? "thinking"
+          : "listening",
+      currentQuestionIndex: currentQuestion,
+      currentQuestionText: currentQ?.text ?? "",
+      userTranscript: input,
+      aiTranscript: lastAssistant,
+      activeTool: whiteboardOpen
+        ? "whiteboard"
+        : codeEditorOpen || isCodingQuestion
+          ? "code"
+          : "chat",
+    };
+  }, [
+    aiTyping,
+    sending,
+    currentQuestion,
+    currentQ?.text,
+    input,
+    displayMessages,
+    whiteboardOpen,
+    codeEditorOpen,
+    isCodingQuestion,
+  ]);
+
+  useEffect(() => {
+    if (preview || finishing || !sessionId) return;
+    const timer = setInterval(() => {
+      const s = chatLiveSnapshotRef.current;
+      let codeSnippet: { language: string; code: string } | undefined;
+      try {
+        const rawCode = codeEditorRef.current?.getSnapshotData();
+        if (rawCode) {
+          const parsed = JSON.parse(rawCode) as {
+            code?: string;
+            language?: string;
+          };
+          if (typeof parsed.code === "string") {
+            codeSnippet = {
+              language: parsed.language || "plaintext",
+              code: parsed.code,
+            };
+          }
+        }
+      } catch {
+        // ignore
+      }
+      publishLiveState.mutate({
+        sessionId,
+        aiState: s.aiState,
+        currentQuestionIndex: s.currentQuestionIndex,
+        currentQuestionText: s.currentQuestionText,
+        userTranscript: s.userTranscript,
+        aiTranscript: s.aiTranscript,
+        activeTool: s.activeTool,
+        codeSnippet,
+      });
+    }, 1800);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, finishing, sessionId]);
+
   const renderSessionHeader = (fullWidth = false) => (
     <div className="shrink-0 border-b bg-card py-2 md:py-3">
       <div
@@ -1321,13 +1404,28 @@ export function ChatInterface({
         )}
       >
         <div className="flex items-center justify-between">
-          <div className="mr-2 min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold md:text-base">
-              {interview.title}
-            </h1>
-            <p className="hidden text-xs text-muted-foreground md:block">
-              Chat Interview with {interview.aiName}
-            </p>
+          <div className="mr-2 flex min-w-0 flex-1 items-center gap-3">
+            <AiInterviewerAvatar
+              aiName={interview.aiName}
+              isSpeaking={aiTyping}
+              isProcessing={sending && !aiTyping}
+              isListening={!aiTyping && !sending}
+              isConnected
+              aiTranscript={
+                displayMessages
+                  .filter((m) => m.role === "ASSISTANT")
+                  .slice(-1)[0]?.content ?? ""
+              }
+              compact
+            />
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold md:text-base">
+                {interview.title}
+              </h1>
+              <p className="hidden text-xs text-muted-foreground md:block">
+                Chat Interview with {interview.aiName}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {questionRemainingSeconds !== null && (

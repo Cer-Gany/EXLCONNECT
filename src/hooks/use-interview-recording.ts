@@ -76,7 +76,9 @@ function stopMediaRecorderSafely(
 function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
-    const audio = new Audio();
+    const isVideo = blob.type.startsWith("video/");
+    const media = document.createElement(isVideo ? "video" : "audio");
+    media.muted = true;
     let resolved = false;
     const timeout = setTimeout(() => {
       if (!resolved) { resolved = true; cleanup(); resolve(undefined); }
@@ -84,8 +86,8 @@ function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
 
     function cleanup() {
       clearTimeout(timeout);
-      audio.removeAttribute("src");
-      audio.load();
+      media.removeAttribute("src");
+      media.load();
       URL.revokeObjectURL(url);
     }
 
@@ -93,25 +95,25 @@ function resolveBlobDuration(blob: Blob): Promise<number | undefined> {
       if (resolved) return;
       resolved = true;
       cleanup();
-      resolve(Math.round(dur));
+      resolve(Math.max(1, Math.round(dur)));
     }
 
-    audio.addEventListener("durationchange", () => {
-      if (audio.duration && isFinite(audio.duration)) {
-        finish(audio.duration);
+    media.addEventListener("durationchange", () => {
+      if (media.duration && isFinite(media.duration) && media.duration < 1e8) {
+        finish(media.duration);
       }
     });
 
-    audio.addEventListener("loadedmetadata", () => {
-      if (audio.duration && isFinite(audio.duration)) {
-        finish(audio.duration);
+    media.addEventListener("loadedmetadata", () => {
+      if (media.duration && isFinite(media.duration) && media.duration < 1e8) {
+        finish(media.duration);
       } else {
-        audio.currentTime = 1e10;
+        media.currentTime = 1e10;
       }
     });
 
-    audio.preload = "auto";
-    audio.src = url;
+    media.preload = "auto";
+    media.src = url;
   });
 }
 
@@ -143,6 +145,8 @@ export function useInterviewRecording({
   const cameraChunksRef = useRef<Blob[]>([]);
   const screenMimeRef = useRef<string>("");
   const cameraMimeRef = useRef<string>("");
+  const cameraStartedAtRef = useRef<number>(0);
+  const screenStartedAtRef = useRef<number>(0);
   const chunksRef = useRef<Blob[]>([]);
   const audioMimeRef = useRef<string>("");
   const mixCtxRef = useRef<AudioContext | null>(null);
@@ -169,54 +173,121 @@ export function useInterviewRecording({
   useEffect(() => { cameraStreamRef.current = cameraStream; }, [cameraStream]);
   useEffect(() => { screenStreamRef.current = screenStream; }, [screenStream]);
 
-  /** Acquire camera and screen streams, reusing stored streams from onboarding. */
-  const acquireStreams = useCallback(async () => {
-    // Reuse camera stream from onboarding if still active
-    const storedCam = getStoredCameraStream();
-    if (storedCam) {
-      setCameraStream(storedCam);
-      cameraStreamRef.current = storedCam;
-      setStoredCameraStream(null);
-    } else if (!wasCameraSkipped()) {
-      try {
-        const cam = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 640, height: 480 },
-        });
-        setCameraStream(cam);
-        cameraStreamRef.current = cam;
-      } catch (err) {
-        log.warn("Camera not available:", err);
+  const bindHiddenVideos = useCallback(() => {
+    if (typeof document === "undefined") return;
+    const setupEl = () => {
+      const v = document.createElement("video");
+      v.muted = true;
+      v.playsInline = true;
+      v.autoplay = true;
+      v.style.position = "fixed";
+      v.style.top = "0";
+      v.style.left = "0";
+      v.style.width = "2px";
+      v.style.height = "2px";
+      v.style.opacity = "0";
+      v.style.pointerEvents = "none";
+      v.style.zIndex = "-1";
+      document.body.appendChild(v);
+      return v;
+    };
+
+    if (cameraStreamRef.current) {
+      if (!cameraVideoRef.current) {
+        cameraVideoRef.current = setupEl();
+      }
+      if (cameraVideoRef.current.srcObject !== cameraStreamRef.current) {
+        cameraVideoRef.current.srcObject = cameraStreamRef.current;
+        cameraVideoRef.current.play().catch(() => {});
       }
     }
 
-    // Reuse screen stream from onboarding if still active
+    if (screenStreamRef.current) {
+      if (!screenVideoRef.current) {
+        screenVideoRef.current = setupEl();
+      }
+      if (screenVideoRef.current.srcObject !== screenStreamRef.current) {
+        screenVideoRef.current.srcObject = screenStreamRef.current;
+        screenVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, []);
+
+  /** Acquire camera and screen streams, reusing stored streams from onboarding. */
+  const acquireStreams = useCallback(async () => {
+    if (!cameraStreamRef.current || !cameraStreamRef.current.active) {
+      const storedCam = getStoredCameraStream();
+      if (storedCam) {
+        setCameraStream(storedCam);
+        cameraStreamRef.current = storedCam;
+        setStoredCameraStream(null);
+      } else if (!wasCameraSkipped()) {
+        try {
+          const cam = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: 640, height: 480 },
+          });
+          setCameraStream(cam);
+          cameraStreamRef.current = cam;
+        } catch (err) {
+          log.warn("Camera not available:", err);
+        }
+      }
+    }
+
+    if (!screenStreamRef.current || !screenStreamRef.current.active) {
+      const storedScreen = getStoredScreenStream();
+      if (storedScreen) {
+        setScreenStream(storedScreen);
+        screenStreamRef.current = storedScreen;
+        setStoredScreenStream(null);
+
+        storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
+          setScreenStream(null);
+          screenStreamRef.current = null;
+        });
+      } else if (!wasScreenSkipped()) {
+        try {
+          const screen = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+          });
+          setScreenStream(screen);
+          screenStreamRef.current = screen;
+
+          screen.getVideoTracks()[0]?.addEventListener("ended", () => {
+            setScreenStream(null);
+            screenStreamRef.current = null;
+          });
+        } catch (err) {
+          log.warn("Screen share not available:", err);
+        }
+      }
+    }
+
+    bindHiddenVideos();
+  }, [bindHiddenVideos]);
+
+  // Immediately adopt any streams already authorized during onboarding so
+  // live recruiter monitoring works as soon as the session page mounts.
+  useEffect(() => {
+    if (!enabled) return;
+    const storedCam = getStoredCameraStream();
+    if (storedCam && !cameraStreamRef.current) {
+      setCameraStream(storedCam);
+      cameraStreamRef.current = storedCam;
+      setStoredCameraStream(null);
+    }
     const storedScreen = getStoredScreenStream();
-    if (storedScreen) {
+    if (storedScreen && !screenStreamRef.current) {
       setScreenStream(storedScreen);
       screenStreamRef.current = storedScreen;
       setStoredScreenStream(null);
-
       storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
         setScreenStream(null);
         screenStreamRef.current = null;
       });
-    } else if (!wasScreenSkipped()) {
-      try {
-        const screen = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-        });
-        setScreenStream(screen);
-        screenStreamRef.current = screen;
-
-        screen.getVideoTracks()[0]?.addEventListener("ended", () => {
-          setScreenStream(null);
-          screenStreamRef.current = null;
-        });
-      } catch (err) {
-        log.warn("Screen share not available:", err);
-      }
     }
-  }, []);
+    bindHiddenVideos();
+  }, [enabled, bindHiddenVideos]);
 
   /** Start continuous screen video recording using the already-acquired screen stream. */
   const startCameraRecording = useCallback(() => {
@@ -274,6 +345,7 @@ export function useInterviewRecording({
     };
 
     recorder.start(5000);
+    cameraStartedAtRef.current = Date.now();
     cameraRecorderRef.current = recorder;
 
     log.info("Camera video recording started:", mimeType);
@@ -334,6 +406,7 @@ export function useInterviewRecording({
     };
 
     recorder.start(5000);
+    screenStartedAtRef.current = Date.now();
     screenRecorderRef.current = recorder;
 
     log.info("Screen video recording started:", mimeType);
@@ -468,6 +541,44 @@ export function useInterviewRecording({
     return Promise.all(pending).then(() => undefined);
   }, [captureAndUpload]);
 
+  /**
+   * Capture lightweight JPEG data URLs from the active camera & screen streams
+   * for one-way live recruiter monitoring (without disk/storage uploads).
+   */
+  const captureLiveFrames = useCallback((): {
+    cameraFrame?: string;
+    screenFrame?: string;
+  } => {
+    const snap = (
+      video: HTMLVideoElement | null,
+      maxW: number,
+      mirror: boolean,
+    ): string | undefined => {
+      if (!video || video.readyState < 2 || video.videoWidth === 0) {
+        return undefined;
+      }
+      const scale = Math.min(1, maxW / video.videoWidth);
+      const w = Math.max(1, Math.round(video.videoWidth * scale));
+      const h = Math.max(1, Math.round(video.videoHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx2d = canvas.getContext("2d");
+      if (!ctx2d) return undefined;
+      if (mirror) {
+        ctx2d.translate(w, 0);
+        ctx2d.scale(-1, 1);
+      }
+      ctx2d.drawImage(video, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", 0.52);
+    };
+
+    return {
+      cameraFrame: snap(cameraVideoRef.current, 360, true),
+      screenFrame: snap(screenVideoRef.current, 640, false),
+    };
+  }, []);
+
   /** Start recording audio and periodic screenshots. */
   const start = useCallback(
     async (micStream?: MediaStream) => {
@@ -518,37 +629,10 @@ export function useInterviewRecording({
       startCameraRecording();
       startScreenRecording();
 
-      // Set up hidden video elements for screenshot capture
-      if (!cameraVideoRef.current) {
-        const v = document.createElement("video");
-        v.muted = true;
-        v.playsInline = true;
-        v.style.display = "none";
-        document.body.appendChild(v);
-        cameraVideoRef.current = v;
-      }
-      if (!screenVideoRef.current) {
-        const v = document.createElement("video");
-        v.muted = true;
-        v.playsInline = true;
-        v.style.display = "none";
-        document.body.appendChild(v);
-        screenVideoRef.current = v;
-      }
-
-      // Bind streams to hidden video elements for canvas capture
-      const bindStream = (video: HTMLVideoElement, stream: MediaStream | null) => {
-        if (stream) {
-          video.srcObject = stream;
-          video.play().catch(() => {});
-        }
-      };
-      // Use refs (set in acquireStreams via state update + useEffect sync)
-      // Small delay to let state sync
+      // Bind streams to offscreen hidden video elements for canvas capture
       setTimeout(() => {
-        bindStream(cameraVideoRef.current!, cameraStreamRef.current);
-        bindStream(screenVideoRef.current!, screenStreamRef.current);
-      }, 500);
+        bindHiddenVideos();
+      }, 300);
 
       // Start periodic screenshot timer
       screenshotTimerRef.current = setInterval(() => { void takeScreenshots(); }, screenshotIntervalMs);
@@ -563,6 +647,7 @@ export function useInterviewRecording({
       attachMicStream,
       startCameraRecording,
       startScreenRecording,
+      bindHiddenVideos,
       takeScreenshots,
       screenshotIntervalMs,
     ],
@@ -599,6 +684,7 @@ export function useInterviewRecording({
     const recorder = recorderRef.current;
     const cameraRecorder = cameraRecorderRef.current;
     const screenRecorder = screenRecorderRef.current;
+    const stoppedAtMs = Date.now();
     // Stop every recorder before doing duration parsing or network I/O. Each
     // stop promise resolves on stop or a bounded timeout, and stop's final
     // dataavailable event is delivered before its stop event.
@@ -672,26 +758,50 @@ export function useInterviewRecording({
       }
     }
 
-    // Build every final blob before starting independent storage requests.
+    // Build every final blob (and patch WebM duration headers on camera & screen videos)
+    // before starting independent storage requests.
     const videoUploads: Promise<string | undefined>[] = [];
     const cameraUploadIndex = cameraChunksRef.current.length > 0 ? videoUploads.length : -1;
     const cameraMime = cameraMimeRef.current || "video/webm";
-    const cameraBlob = new Blob(cameraChunksRef.current, {
+    const rawCameraBlob = new Blob(cameraChunksRef.current, {
       type: cameraMime,
     });
-    if (cameraBlob.size > 0) videoUploads.push(uploadRecording(cameraBlob, `camera-recording-${Date.now()}.webm`));
+    if (rawCameraBlob.size > 0) {
+      const elapsedCameraMs = cameraStartedAtRef.current > 0
+        ? Math.max(1000, stoppedAtMs - cameraStartedAtRef.current)
+        : (audioDuration ? audioDuration * 1000 : undefined);
+      const resolvedCamSec = await resolveBlobDuration(rawCameraBlob);
+      const cameraDurationMs = resolvedCamSec ? resolvedCamSec * 1000 : elapsedCameraMs;
+      const cameraBlob =
+        cameraMime.includes("webm") && cameraDurationMs
+          ? await fixWebmDuration(rawCameraBlob, cameraDurationMs).catch(() => rawCameraBlob)
+          : rawCameraBlob;
+      videoUploads.push(uploadRecording(cameraBlob, `camera-recording-${Date.now()}.webm`));
+    }
 
     cameraRecorderRef.current = null;
     cameraChunksRef.current = [];
     cameraMimeRef.current = "";
+    cameraStartedAtRef.current = 0;
 
     const screenUploadIndex = screenChunksRef.current.length > 0 ? videoUploads.length : -1;
     const screenMime = screenMimeRef.current || "video/webm";
-    const screenBlob = new Blob(screenChunksRef.current, {
+    const rawScreenBlob = new Blob(screenChunksRef.current, {
       type: screenMime,
     });
 
-    if (screenBlob.size > 0) videoUploads.push(uploadRecording(screenBlob, `screen-recording-${Date.now()}.webm`));
+    if (rawScreenBlob.size > 0) {
+      const elapsedScreenMs = screenStartedAtRef.current > 0
+        ? Math.max(1000, stoppedAtMs - screenStartedAtRef.current)
+        : (audioDuration ? audioDuration * 1000 : undefined);
+      const resolvedScreenSec = await resolveBlobDuration(rawScreenBlob);
+      const screenDurationMs = resolvedScreenSec ? resolvedScreenSec * 1000 : elapsedScreenMs;
+      const screenBlob =
+        screenMime.includes("webm") && screenDurationMs
+          ? await fixWebmDuration(rawScreenBlob, screenDurationMs).catch(() => rawScreenBlob)
+          : rawScreenBlob;
+      videoUploads.push(uploadRecording(screenBlob, `screen-recording-${Date.now()}.webm`));
+    }
 
     let audioUpload: Promise<string | undefined> = Promise.resolve(undefined);
     if (audioBlob?.size) audioUpload = uploadRecording(audioBlob, `recording-${Date.now()}.${audioMimeRef.current.includes("webm") ? "webm" : "m4a"}`);
@@ -703,6 +813,7 @@ export function useInterviewRecording({
     screenRecorderRef.current = null;
     screenChunksRef.current = [];
     screenMimeRef.current = "";
+    screenStartedAtRef.current = 0;
 
     recorderRef.current = null;
 
@@ -790,6 +901,7 @@ export function useInterviewRecording({
     addTtsChunk,
     cancelTts,
     attachMicStream,
+    captureLiveFrames,
     cameraStream,
     screenStream,
     isRecording,

@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface AntiCheatingViolation {
-  type: "page_departure" | "paste" | "multi_screen";
+  type:
+    | "page_departure"
+    | "paste"
+    | "multi_screen"
+    | "multiple_faces"
+    | "face_not_visible"
+    | "looking_away"
+    | "prohibited_object";
   timestamp: number;
   detail?: string;
 }

@@ -132,6 +132,7 @@ export function useVoice({
 
   const relayConnectorRef = useRef<RelayConnector<Record<string, unknown>> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const ttsAnalyserRef = useRef<AnalyserNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const processorRef = useRef<any>(null);
@@ -380,6 +381,12 @@ export function useVoice({
     relayConnectorRef.current = null;
     const context = audioContextRef.current;
     audioContextRef.current = null;
+    try {
+      ttsAnalyserRef.current?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    ttsAnalyserRef.current = null;
     if (context && context.state !== "closed") {
       void context.close().catch((error) => log.warn("Voice audio context close failed", error));
     }
@@ -540,9 +547,25 @@ export function useVoice({
     const audioBuffer = ctx.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
     audioBuffer.copyToChannel(float32, 0);
 
+    if (!ttsAnalyserRef.current) {
+      try {
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.45;
+        analyser.connect(ctx.destination);
+        ttsAnalyserRef.current = analyser;
+      } catch {
+        ttsAnalyserRef.current = null;
+      }
+    }
+
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(ctx.destination);
+    if (ttsAnalyserRef.current) {
+      source.connect(ttsAnalyserRef.current);
+    } else {
+      source.connect(ctx.destination);
+    }
 
     // Schedule playback sequentially
     const startAt = Math.max(now, playTimeRef.current);
@@ -1496,6 +1519,7 @@ export function useVoice({
     sendWhiteboardUpdate,
     interruptPlayback,
     mediaStreamRef,
+    ttsAnalyserRef,
     getUnsentPayload,
   };
 }

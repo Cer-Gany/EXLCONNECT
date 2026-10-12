@@ -5,6 +5,7 @@ import {
     CodeEditorCanvas,
     type CodeEditorCanvasRef,
 } from "@/components/code-editor/code-editor-canvas";
+import { AiInterviewerAvatar } from "@/components/session/ai-interviewer-avatar";
 import { IntervieweeHelpPopover } from "@/components/session/interviewee-help-popover";
 import {
     normalizeSessionEndReason,
@@ -45,6 +46,7 @@ import { useInterviewRecording } from "@/hooks/use-interview-recording";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useVoice, type InterviewContext } from "@/hooks/use-voice";
 import { stopRecordingAfterMetadataCheckpoint } from "@/lib/recording-finalization";
+import { trpc } from "@/lib/trpc/client";
 import {
     AlertCircle,
     Check,
@@ -535,10 +537,17 @@ export function VoiceInterface({
   useEffect(() => {
     if (preview) return;
     const handleBeforeUnload = () => {
-      navigator.sendBeacon(
-        "/api/session/leave",
-        new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
-      );
+      if (endingRef.current) {
+        navigator.sendBeacon(
+          "/api/session/complete",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      } else {
+        navigator.sendBeacon(
+          "/api/session/leave",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      }
 
       // Persist any unsent transcript messages
       const msgPayload = getUnsentPayloadRef.current();
@@ -573,10 +582,17 @@ export function VoiceInterface({
     };
 
     const handlePageHide = () => {
-      navigator.sendBeacon(
-        "/api/session/leave",
-        new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
-      );
+      if (endingRef.current) {
+        navigator.sendBeacon(
+          "/api/session/complete",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      } else {
+        navigator.sendBeacon(
+          "/api/session/leave",
+          new Blob([JSON.stringify({ sessionId })], { type: "application/json" }),
+        );
+      }
       // Persist any unsent transcript messages
       const msgPayload = getUnsentPayloadRef.current();
       if (msgPayload) {
@@ -1394,7 +1410,6 @@ export function VoiceInterface({
     const normalizedReason = normalizeSessionEndReason(reason);
     endingRef.current = true;
     setLocalCompletionReason(normalizedReason);
-    setLocallyCompleted(true);
     setIsSaving(true);
 
     voice.stopListening();
@@ -1402,8 +1417,26 @@ export function VoiceInterface({
     // producing responses while long video files are being transferred.
     voice.stopInteraction();
 
+    const markSessionCompletedOnServer = async () => {
+      if (preview || !sessionId || sessionId === "__preview__") return;
+      try {
+        await fetch("/api/session/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+          keepalive: true,
+        });
+      } catch (err) {
+        console.error("[voice] Safety-net session complete failed:", err);
+      }
+    };
+
     try {
+      // Immediately persist final transcript messages and mark session COMPLETED
+      // so the recruiter dashboard reflects COMPLETED right away.
       await Promise.allSettled([
+        withTimeout(voice.disconnect(), 5000, "disconnect and complete voice session"),
+        withTimeout(markSessionCompletedOnServer(), 5000, "mark session completed"),
         withTimeout(saveAllDrawings(), 5000, "save drawings"),
         withTimeout(saveAllCodeSnippets(), 5000, "save code snippets"),
       ]);
@@ -1446,16 +1479,15 @@ export function VoiceInterface({
         console.error("[voice] Failed to save recording:", err);
       }
 
-      // Save pending transcript and complete the server session only after
-      // recording metadata persistence has settled.
-      await voice.disconnect();
-
+      await markSessionCompletedOnServer();
     } catch (err) {
       console.error("[voice] Failed to end interview cleanly:", err);
     } finally {
+      setIsSaving(false);
+      setLocallyCompleted(true);
       onComplete?.(normalizedReason);
     }
-  }, [saveAllDrawings, saveAllCodeSnippets, videoMode, recording, sessionId, voice, onComplete]);
+  }, [saveAllDrawings, saveAllCodeSnippets, videoMode, recording, sessionId, preview, voice, onComplete]);
 
   useEffect(() => {
     handleEndInterviewRef.current = handleEndInterview;
@@ -1781,6 +1813,106 @@ export function VoiceInterface({
     }
   }, [voice.isConnected, isCodingQuestion, isWhiteboardQuestion]);
 
+  // ── Silent one-way live telemetry for recruiter monitoring ──────
+  const publishLiveState = trpc.session.publishLiveState.useMutation();
+  const liveSnapshotStateRef = useRef({
+    aiState: "idle" as "speaking" | "listening" | "thinking" | "transitioning" | "idle",
+    currentQuestionIndex: 0,
+    currentQuestionText: "",
+    userTranscript: "",
+    aiTranscript: "",
+    activeTool: "voice" as "voice" | "whiteboard" | "code",
+    messages: [] as Message[],
+  });
+
+  useEffect(() => {
+    liveSnapshotStateRef.current = {
+      aiState: showVoiceTransitioning
+        ? "transitioning"
+        : showVoiceProcessing
+          ? "thinking"
+          : showVoiceSpeaking
+            ? "speaking"
+            : showVoiceListening
+              ? "listening"
+              : "idle",
+      currentQuestionIndex: Math.max(0, voice.currentQuestionIndex),
+      currentQuestionText,
+      userTranscript: voice.userTranscript || "",
+      aiTranscript: voice.aiTranscript || "",
+      activeTool: whiteboardActive
+        ? "whiteboard"
+        : codeEditorActive
+          ? "code"
+          : "voice",
+      messages,
+    };
+  }, [
+    showVoiceTransitioning,
+    showVoiceProcessing,
+    showVoiceSpeaking,
+    showVoiceListening,
+    voice.currentQuestionIndex,
+    currentQuestionText,
+    voice.userTranscript,
+    voice.aiTranscript,
+    whiteboardActive,
+    codeEditorActive,
+    messages,
+  ]);
+
+  useEffect(() => {
+    if (preview || shouldShowCompletionScreen || !sessionId) return;
+
+    const pushSnapshot = () => {
+      const frames = recording.captureLiveFrames();
+      const s = liveSnapshotStateRef.current;
+      let codeSnippet: { language: string; code: string } | undefined;
+      try {
+        const rawCode =
+          codeEditorRef.current?.getSnapshotData() ??
+          liveCodeSnapshotRef.current;
+        if (rawCode) {
+          const parsed = JSON.parse(rawCode) as {
+            code?: string;
+            language?: string;
+          };
+          if (typeof parsed.code === "string") {
+            codeSnippet = {
+              language: parsed.language || "plaintext",
+              code: parsed.code,
+            };
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+
+      publishLiveState.mutate({
+        sessionId,
+        cameraFrame: frames.cameraFrame,
+        screenFrame: frames.screenFrame,
+        aiState: s.aiState,
+        currentQuestionIndex: s.currentQuestionIndex,
+        currentQuestionText: s.currentQuestionText,
+        userTranscript: s.userTranscript,
+        aiTranscript: s.aiTranscript,
+        activeTool: s.activeTool,
+        codeSnippet,
+        messages: s.messages.slice(-80).map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          source: m.source,
+        })),
+      });
+    };
+
+    const timer = setInterval(pushSnapshot, 1400);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, shouldShowCompletionScreen, sessionId]);
+
   // ── Render ──────────────────────────────────────────────────────
   return shouldShowCompletionScreen ? completionScreen : (
     <div className="relative flex h-screen flex-col overflow-hidden bg-background">
@@ -1904,6 +2036,16 @@ export function VoiceInterface({
             <div className="relative flex min-h-0 flex-1 flex-col">
               {/* Minimized voice status bar */}
               <div className="flex items-center gap-3 border-b bg-card px-4 py-2">
+                <AiInterviewerAvatar
+                  aiName={aiName}
+                  isSpeaking={showVoiceSpeaking}
+                  isListening={showVoiceListening}
+                  isProcessing={showVoiceProcessing || showVoiceTransitioning}
+                  isConnected={voice.isConnected}
+                  ttsAnalyserRef={voice.ttsAnalyserRef}
+                  aiTranscript={voice.aiTranscript}
+                  compact
+                />
                 {showVoiceSpeaking && (
                   <div className="flex items-center gap-1.5 text-primary">
                     <Volume2 className="h-4 w-4 animate-pulse" />
@@ -1943,11 +2085,6 @@ export function VoiceInterface({
                     {voice.isConnected
                       ? `Voice active — ${whiteboardActive ? "draw" : "code"} freely`
                       : "Voice disconnected"}
-                  </span>
-                )}
-                {showVoiceListening && voice.userTranscript && (
-                  <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground italic">
-                    &ldquo;{voice.userTranscript}&rdquo;
                   </span>
                 )}
               </div>
@@ -2238,7 +2375,17 @@ export function VoiceInterface({
                 }
               >
               {/* Status indicator */}
-              <div className="flex flex-col items-center gap-4">
+              <div className="flex flex-col items-center gap-4 px-4">
+                <AiInterviewerAvatar
+                  aiName={aiName}
+                  isSpeaking={showVoiceSpeaking}
+                  isListening={showVoiceListening}
+                  isProcessing={showVoiceProcessing || showVoiceTransitioning}
+                  isConnected={voice.isConnected}
+                  ttsAnalyserRef={voice.ttsAnalyserRef}
+                  aiTranscript={voice.aiTranscript}
+                  className="w-56 h-56 sm:w-64 sm:h-64 md:w-72 md:h-72 shrink-0"
+                />
                 {showVoiceTransitioning && (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin" />
@@ -2253,15 +2400,6 @@ export function VoiceInterface({
                       <Loader2 className="h-5 w-5 animate-spin" />
                       <span className="text-sm font-medium">Thinking...</span>
                     </div>
-                    {(() => {
-                      const lastUserMsg = messages.filter(m => m.role === "user").pop();
-                      const displayText = lastUserMsg?.content || voice.userTranscript;
-                      return displayText ? (
-                        <p className="max-w-md text-center text-sm text-muted-foreground">
-                          &ldquo;{displayText}&rdquo;
-                        </p>
-                      ) : null;
-                    })()}
                   </div>
                 )}
                 {showVoiceSpeaking && (
@@ -2286,13 +2424,6 @@ export function VoiceInterface({
                   </div>
                 )}
 
-                {/* Live transcript while listening */}
-                {showVoiceListening && voice.userTranscript && (
-                  <p className="max-w-md text-center text-sm text-muted-foreground">
-                    &ldquo;{voice.userTranscript}&rdquo;
-                  </p>
-                )}
-
                 {/* Audio waveform — driven by real audio level */}
                 {(showVoiceSpeaking || showVoiceListening) && (
                   <div className="flex items-center gap-1">
@@ -2312,15 +2443,6 @@ export function VoiceInterface({
                       );
                     })}
                   </div>
-                )}
-
-                {/* AI response text */}
-                {voice.aiTranscript && !showVoiceListening && (
-                  <p className="max-w-md text-center text-sm text-muted-foreground italic">
-                    {voice.aiTranscript.length > 200
-                      ? voice.aiTranscript.slice(0, 200) + "..."
-                      : voice.aiTranscript}
-                  </p>
                 )}
               </div>
 
@@ -2371,16 +2493,16 @@ export function VoiceInterface({
               )}
               </div>
 
-              {/* Mobile: draggable divider between voice and transcript */}
-              {isMobile && !mobileTranscriptCollapsed && (
+              {/* Mobile: draggable divider between voice and transcript (hidden for candidate) */}
+              {false && isMobile && !mobileTranscriptCollapsed && (
                 <div
                   className="group flex h-1 shrink-0 cursor-row-resize items-center justify-center border-t border-b border-border bg-muted/30 transition-colors hover:bg-primary/10 active:bg-primary/20 touch-none"
                   onPointerDown={handleVoiceTranscriptSplitDown}
                 />
               )}
 
-              {/* Mobile: transcript below voice when no whiteboard/code editor */}
-              {isMobile && (
+              {/* Mobile: transcript below voice (hidden for candidate; visible only on recruiter dashboard) */}
+              {false && isMobile && (
                 <div
                   className={
                     mobileTranscriptCollapsed
@@ -2490,16 +2612,16 @@ export function VoiceInterface({
           )}
         </div>
 
-        {/* ── Draggable divider (desktop only) ────────────────── */}
-        {!isMobile && !desktopTranscriptCollapsed && (
+        {/* ── Draggable divider (hidden for candidate; transcript/chat is recruiter-only) ── */}
+        {false && !isMobile && !desktopTranscriptCollapsed && (
           <div
             className="group flex w-1 cursor-col-resize touch-none items-center justify-center border-l border-r border-border bg-muted/30 transition-colors hover:bg-primary/10 active:bg-primary/20"
             onPointerDown={onDragStart}
           />
         )}
 
-        {/* ── Right panel — Transcript + optional Chat (desktop only) ── */}
-        {!isMobile && (
+        {/* ── Right panel — Transcript + Chat (hidden for candidate; recruiter-only) ── */}
+        {false && !isMobile && (
         <div
           ref={rightPanelRef}
           className="flex min-h-0 shrink-0 flex-col border-l bg-card"
@@ -2733,8 +2855,8 @@ export function VoiceInterface({
             </span>
           </div>
 
-          {/* Chat toggle (mobile: opens transcript+chat sheet; same layout as other icon buttons) */}
-          {chatEnabled && (
+          {/* Chat toggle (hidden for candidate; chat/transcript is recruiter-only) */}
+          {false && chatEnabled && (
             <div data-tour="voice-chat" className="flex flex-col items-center gap-0.5">
               <Button
                 size="icon"
@@ -2871,8 +2993,8 @@ export function VoiceInterface({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ── Mobile transcript + chat sheet (replaces separate transcript button) ── */}
-      {isMobile && chatEnabled && (
+      {/* ── Mobile transcript + chat sheet (hidden for candidate; recruiter-only) ── */}
+      {false && isMobile && chatEnabled && (
         <Sheet open={chatOpen} onOpenChange={setChatOpen}>
           <SheetContent
             side="bottom"

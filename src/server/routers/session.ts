@@ -541,7 +541,19 @@ export const sessionRouter = router({
       z.object({
         sessionId: z.string(),
         violation: z.object({
-          type: z.enum(["page_departure", "paste", "multi_screen", "tab_switch", "focus_lost", "copy", "cut"]),
+          type: z.enum([
+            "page_departure",
+            "paste",
+            "multi_screen",
+            "tab_switch",
+            "focus_lost",
+            "copy",
+            "cut",
+            "multiple_faces",
+            "face_not_visible",
+            "looking_away",
+            "prohibited_object",
+          ]),
           timestamp: z.number(),
           detail: z.string().optional(),
         }),
@@ -844,4 +856,175 @@ export const sessionRouter = router({
 
       return { deleted: input.ids.length };
     }),
+
+  publishLiveState: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        cameraFrame: z.string().max(350_000).optional(),
+        screenFrame: z.string().max(500_000).optional(),
+        aiState: z
+          .enum(["speaking", "listening", "thinking", "transitioning", "idle"])
+          .optional(),
+        currentQuestionIndex: z.number().int().min(0).optional(),
+        currentQuestionText: z.string().max(2000).optional(),
+        userTranscript: z.string().max(4000).optional(),
+        aiTranscript: z.string().max(4000).optional(),
+        activeTool: z.enum(["voice", "whiteboard", "code", "chat"]).optional(),
+        codeSnippet: z
+          .object({
+            language: z.string().max(64),
+            code: z.string().max(50_000),
+          })
+          .optional(),
+        messages: z
+          .array(
+            z.object({
+              id: z.string(),
+              role: z.enum(["user", "assistant"]),
+              content: z.string().max(8000),
+              source: z.enum(["voice", "chat"]).optional(),
+            }),
+          )
+          .max(200)
+          .optional(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const store = getLiveSessionStore();
+      const now = Date.now();
+
+      // Prune stale sessions older than 90 seconds
+      for (const [id, entry] of store.entries()) {
+        if (now - entry.updatedAt > 90_000) {
+          store.delete(id);
+        }
+      }
+
+      const prev =
+        store.get(input.sessionId) ?? readLiveSessionFromDisk(input.sessionId);
+      const nextState: LiveSessionState = {
+        sessionId: input.sessionId,
+        cameraFrame: input.cameraFrame ?? prev?.cameraFrame,
+        screenFrame: input.screenFrame ?? prev?.screenFrame,
+        aiState: input.aiState ?? prev?.aiState ?? "idle",
+        currentQuestionIndex:
+          input.currentQuestionIndex ?? prev?.currentQuestionIndex ?? 0,
+        currentQuestionText:
+          input.currentQuestionText ?? prev?.currentQuestionText ?? "",
+        userTranscript: input.userTranscript ?? prev?.userTranscript ?? "",
+        aiTranscript: input.aiTranscript ?? prev?.aiTranscript ?? "",
+        activeTool: input.activeTool ?? prev?.activeTool ?? "voice",
+        codeSnippet: input.codeSnippet ?? prev?.codeSnippet,
+        messages: input.messages ?? prev?.messages ?? [],
+        updatedAt: now,
+      };
+      store.set(input.sessionId, nextState);
+      writeLiveSessionToDisk(nextState);
+
+      return { ok: true };
+    }),
+
+  getLiveState: protectedProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(({ input }) => {
+      const store = getLiveSessionStore();
+      const memEntry = store.get(input.sessionId);
+      const diskEntry =
+        !memEntry || Date.now() - memEntry.updatedAt > 2000
+          ? readLiveSessionFromDisk(input.sessionId)
+          : null;
+      const entry =
+        diskEntry && (!memEntry || diskEntry.updatedAt >= memEntry.updatedAt)
+          ? diskEntry
+          : memEntry;
+      if (!entry) return null;
+      if (diskEntry && entry === diskEntry) {
+        store.set(input.sessionId, diskEntry);
+      }
+      // Consider live feed active if updated within the last 30 seconds
+      const isLive = Date.now() - entry.updatedAt < 30_000;
+      return {
+        ...entry,
+        isLive,
+      };
+    }),
 });
+
+export interface LiveSessionMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  source?: "voice" | "chat";
+}
+
+export interface LiveSessionState {
+  sessionId: string;
+  cameraFrame?: string;
+  screenFrame?: string;
+  aiState: "speaking" | "listening" | "thinking" | "transitioning" | "idle";
+  currentQuestionIndex: number;
+  currentQuestionText: string;
+  userTranscript: string;
+  aiTranscript: string;
+  activeTool: "voice" | "whiteboard" | "code" | "chat";
+  codeSnippet?: { language: string; code: string };
+  messages?: LiveSessionMessage[];
+  updatedAt: number;
+}
+
+const globalForLiveSessions = globalThis as unknown as {
+  __liveSessionStates?: Map<string, LiveSessionState>;
+};
+
+function getLiveSessionStore(): Map<string, LiveSessionState> {
+  if (!globalForLiveSessions.__liveSessionStates) {
+    globalForLiveSessions.__liveSessionStates = new Map<
+      string,
+      LiveSessionState
+    >();
+  }
+  return globalForLiveSessions.__liveSessionStates;
+}
+
+function getLiveSessionFilePath(sessionId: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require("node:path") as typeof import("node:path");
+  const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(os.tmpdir(), "exlconnect-live-sessions", `${safeId}.json`);
+}
+
+function writeLiveSessionToDisk(state: LiveSessionState): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs") as typeof import("node:fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("node:path") as typeof import("node:path");
+    const filePath = getLiveSessionFilePath(state.sessionId);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(state), "utf8");
+  } catch {
+    // Ignore disk cache errors
+  }
+}
+
+function readLiveSessionFromDisk(sessionId: string): LiveSessionState | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs") as typeof import("node:fs");
+    const filePath = getLiveSessionFilePath(sessionId);
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as LiveSessionState;
+    if (Date.now() - parsed.updatedAt > 90_000) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+

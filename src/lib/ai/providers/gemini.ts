@@ -101,10 +101,18 @@ function toGeminiRequest(messages: LLMMessage[]): {
   };
 }
 
+function isModelNotFoundGeminiError(error: unknown): boolean {
+  const status =
+    (error as { status?: number })?.status ??
+    (error as { code?: number })?.code;
+  const msg = error instanceof Error ? error.message : String(error);
+  return status === 404 || /no longer available|not found|NOT_FOUND/i.test(msg);
+}
+
 export class GeminiProvider implements LLMProvider {
   id = "gemini";
   name = "Google Gemini";
-  models = [DEFAULT_MODEL, "gemini-2.5-flash", "gemini-2.5-pro"];
+  models = [DEFAULT_MODEL, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro"];
   defaultModel = DEFAULT_MODEL;
 
   private client: GoogleGenAI | null;
@@ -125,7 +133,7 @@ export class GeminiProvider implements LLMProvider {
     params: GenerationParams & { model?: string },
   ): Promise<LLMResponse> {
     const client = this.ensureClient();
-    const model = params.model ?? this.defaultModel;
+    let model = params.model ?? this.defaultModel;
     const { systemInstruction, contents } = toGeminiRequest(params.messages);
 
     let response: Awaited<ReturnType<typeof client.models.generateContent>> | null =
@@ -146,6 +154,10 @@ export class GeminiProvider implements LLMProvider {
         break;
       } catch (error) {
         lastError = error;
+        if (isModelNotFoundGeminiError(error) && model !== this.defaultModel) {
+          model = this.defaultModel;
+          continue;
+        }
         if (!isRetryableGeminiError(error) || attempt === MAX_RETRIES - 1) {
           throw error;
         }
@@ -174,18 +186,35 @@ export class GeminiProvider implements LLMProvider {
     params: GenerationParams & { model?: string },
   ): AsyncIterable<string> {
     const client = this.ensureClient();
-    const model = params.model ?? this.defaultModel;
+    const requestedModel = params.model ?? this.defaultModel;
     const { systemInstruction, contents } = toGeminiRequest(params.messages);
 
-    const stream = await client.models.generateContentStream({
-      model,
-      contents,
-      config: {
-        systemInstruction: systemInstruction || undefined,
-        temperature: params.temperature ?? 0.25,
-        maxOutputTokens: params.maxTokens ?? 2048,
-      },
-    });
+    let stream;
+    try {
+      stream = await client.models.generateContentStream({
+        model: requestedModel,
+        contents,
+        config: {
+          systemInstruction: systemInstruction || undefined,
+          temperature: params.temperature ?? 0.25,
+          maxOutputTokens: params.maxTokens ?? 2048,
+        },
+      });
+    } catch (error) {
+      if (isModelNotFoundGeminiError(error) && requestedModel !== this.defaultModel) {
+        stream = await client.models.generateContentStream({
+          model: this.defaultModel,
+          contents,
+          config: {
+            systemInstruction: systemInstruction || undefined,
+            temperature: params.temperature ?? 0.25,
+            maxOutputTokens: params.maxTokens ?? 2048,
+          },
+        });
+      } else {
+        throw error;
+      }
+    }
 
     for await (const chunk of stream) {
       const text = chunk.text;

@@ -21,6 +21,7 @@ import { getMicTestMessage } from "@/lib/i18n";
 import {
     setCameraSkipped,
     setScreenSkipped,
+    setStoredCameraStream,
     setStoredScreenStream,
 } from "@/lib/media-stream-store";
 import { cn } from "@/lib/utils";
@@ -274,12 +275,6 @@ function CameraCheck({
     }
   }, []);
 
-  const stopCamera = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    setStreaming(false);
-  }, []);
-
   const capture = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -292,13 +287,21 @@ function CameraCheck({
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    stopCamera();
+    if (streamRef.current) {
+      setStoredCameraStream(streamRef.current);
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setStreaming(false);
     setPhoto(dataUrl);
     onDone();
-  }, [stopCamera, onDone]);
+  }, [onDone]);
 
   const retake = useCallback(() => {
     setPhoto(null);
+    setStoredCameraStream(null);
     startCamera();
   }, [startCamera]);
 
