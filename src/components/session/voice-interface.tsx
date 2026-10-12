@@ -794,8 +794,22 @@ export function VoiceInterface({
     setRemainingSeconds(durationMinutes * 60);
   }, [voice.isConnected, durationMinutes]);
 
+  // Main countdown timer tick:
+  // Pauses whenever AI is speaking, reciting question, processing, or transitioning
   useEffect(() => {
-    if (remainingSeconds === null || remainingSeconds <= 0) return;
+    if (
+      preview ||
+      !voice.isConnected ||
+      remainingSeconds === null ||
+      remainingSeconds <= 0 ||
+      !isQuestionRecited ||
+      voice.isSpeaking ||
+      voice.isProcessing ||
+      voice.isTransitioning
+    ) {
+      return;
+    }
+
     const id = setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev === null) return null;
@@ -803,7 +817,15 @@ export function VoiceInterface({
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [remainingSeconds]);
+  }, [
+    remainingSeconds,
+    voice.isConnected,
+    isQuestionRecited,
+    voice.isSpeaking,
+    voice.isProcessing,
+    voice.isTransitioning,
+    preview,
+  ]);
 
   // Reset recitation tracking when current question index changes
   useEffect(() => {
@@ -838,12 +860,16 @@ export function VoiceInterface({
     preview,
   ]);
 
-  // Safety fallback: if 15s pass without recitation finishing, or candidate speaks, unlock timer
+  // Safety fallback: if 15s pass after recitation has started, or candidate speaks, unlock timer
   useEffect(() => {
     if (preview || !voice.isConnected || isQuestionRecited) return;
 
     const fallbackTimer = setTimeout(() => {
-      setIsQuestionRecited(true);
+      // Only unlock if speaking had actually started and got stuck.
+      // If AI hasn't even begun speaking, do not count down the candidate's answer time!
+      if (hasSpeakingStartedForQRef.current) {
+        setIsQuestionRecited(true);
+      }
     }, 15000);
 
     return () => clearTimeout(fallbackTimer);
@@ -1292,43 +1318,25 @@ export function VoiceInterface({
     }
   }, [saveCurrentContent, voice]);
 
-  // Automatically move to the next question when its timer expires.
+  // Per requirement: question navigation is strictly manual.
+  // The system does NOT auto-skip or auto-advance when questionRemainingSeconds reaches 0.
   useEffect(() => {
     if (
       preview ||
       questionRemainingSeconds !== 0 ||
       questionTimerExpiredRef.current ||
       !voice.isConnected ||
-      voice.currentQuestionIndex < 0 ||
-      !isQuestionRecited ||
-      voice.isSpeaking ||
-      voice.isProcessing ||
-      voice.isTransitioning
+      voice.currentQuestionIndex < 0
     ) {
       return;
     }
 
     questionTimerExpiredRef.current = true;
-
-    const isLastQuestion =
-      voice.currentQuestionIndex >= voice.totalQuestions - 1;
-
-    if (isLastQuestion) {
-      handleEndInterviewRef.current("COMPLETED");
-    } else {
-      handleNextQuestion();
-    }
   }, [
     questionRemainingSeconds,
     preview,
     voice.isConnected,
     voice.currentQuestionIndex,
-    voice.totalQuestions,
-    isQuestionRecited,
-    voice.isSpeaking,
-    voice.isProcessing,
-    voice.isTransitioning,
-    handleNextQuestion,
   ]);
 
   // ── Editor toggle helpers (save before deactivate, restore on activate)
@@ -1956,9 +1964,25 @@ export function VoiceInterface({
             Q{voice.currentQuestionIndex + 1} / {voice.totalQuestions}
           </span>
           {remainingSeconds !== null && isMobile && (
-            <div className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${isTimeLow ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
-              <Clock className="h-3 w-3" />
-              <span>{formatTime(remainingSeconds)} left</span>
+            <div
+              className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium tabular-nums ${
+                voice.isSpeaking || voice.isProcessing || !isQuestionRecited
+                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : isTimeLow
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {voice.isSpeaking || voice.isProcessing || !isQuestionRecited ? (
+                <Volume2 className="h-3 w-3 text-amber-500 animate-pulse" />
+              ) : (
+                <Clock className="h-3 w-3" />
+              )}
+              <span>
+                {voice.isSpeaking || voice.isProcessing || !isQuestionRecited
+                  ? `Paused · ${formatTime(remainingSeconds)}`
+                  : `${formatTime(remainingSeconds)} left`}
+              </span>
             </div>
           )}
           {questionRemainingSeconds !== null && (
@@ -1968,9 +1992,11 @@ export function VoiceInterface({
                   ? "bg-muted text-muted-foreground"
                   : voice.isSpeaking || voice.isProcessing
                     ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                    : questionRemainingSeconds <= 10
-                      ? "bg-destructive/10 text-destructive animate-pulse"
-                      : "bg-primary/10 text-primary"
+                    : questionRemainingSeconds === 0
+                      ? "bg-destructive/15 text-destructive font-semibold"
+                      : questionRemainingSeconds <= 10
+                        ? "bg-destructive/10 text-destructive animate-pulse"
+                        : "bg-primary/10 text-primary"
               }`}
             >
               {!isQuestionRecited ? (
@@ -1983,6 +2009,11 @@ export function VoiceInterface({
                   <Volume2 className="h-3 w-3 text-amber-500" />
                   <span>Paused · {formatTime(questionRemainingSeconds)}</span>
                 </>
+              ) : questionRemainingSeconds === 0 ? (
+                <>
+                  <Clock className="h-3 w-3 text-destructive" />
+                  <span>Time&apos;s up · Proceed when ready</span>
+                </>
               ) : (
                 <>
                   <Clock className="h-3 w-3" />
@@ -1991,24 +2022,38 @@ export function VoiceInterface({
               )}
             </div>
           )}
-          {voice.isConnected && voice.currentQuestionIndex < voice.totalQuestions - 1 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleNextQuestion}
-              disabled={voice.isTransitioning}
-              className="h-6 gap-1 px-2.5 text-xs font-medium text-primary border-primary/25 hover:bg-primary hover:text-primary-foreground shrink-0 transition-colors"
-              title="Move to the next question"
-            >
-              {voice.isTransitioning && voice.transitionDirection !== "previous" ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <>
-                  <span>Next Question</span>
-                  <ChevronRight className="h-3 w-3" />
-                </>
-              )}
-            </Button>
+          {voice.isConnected && (
+            voice.currentQuestionIndex < voice.totalQuestions - 1 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleNextQuestion}
+                disabled={voice.isTransitioning}
+                className="h-6 gap-1 px-2.5 text-xs font-medium text-primary border-primary/25 hover:bg-primary hover:text-primary-foreground shrink-0 transition-colors"
+                title="Move to the next question"
+              >
+                {voice.isTransitioning && voice.transitionDirection !== "previous" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <>
+                    <span>Next Question</span>
+                    <ChevronRight className="h-3 w-3" />
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowEndDialog(true)}
+                disabled={voice.isTransitioning}
+                className="h-6 gap-1 px-2.5 text-xs font-medium text-destructive border-destructive/25 hover:bg-destructive hover:text-destructive-foreground shrink-0 transition-colors"
+                title="Finish interview"
+              >
+                <span>Finish Interview</span>
+                <Check className="h-3 w-3" />
+              </Button>
+            )
           )}
         </div>
         {/* Current question text */}
@@ -2821,9 +2866,25 @@ export function VoiceInterface({
         <div className={`relative flex shrink-0 items-center justify-center gap-2 border-t bg-card px-3 py-2 md:gap-6 md:px-6${preview ? " pointer-events-none" : ""}`}>
           {/* Timer — right-aligned on desktop only (mobile shows it in header) */}
           {remainingSeconds !== null && !isMobile && (
-            <div className={`absolute right-3 flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium tabular-nums md:right-6 md:px-2.5 ${isTimeLow ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
-              <Clock className="h-3.5 w-3.5" />
-              <span>{formatTime(remainingSeconds)} left</span>
+            <div
+              className={`absolute right-3 flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium tabular-nums md:right-6 md:px-2.5 ${
+                voice.isSpeaking || voice.isProcessing || !isQuestionRecited
+                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : isTimeLow
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {voice.isSpeaking || voice.isProcessing || !isQuestionRecited ? (
+                <Volume2 className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+              ) : (
+                <Clock className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {voice.isSpeaking || voice.isProcessing || !isQuestionRecited
+                  ? `Paused · ${formatTime(remainingSeconds)}`
+                  : `${formatTime(remainingSeconds)} left`}
+              </span>
             </div>
           )}
           {/* Mic toggle */}

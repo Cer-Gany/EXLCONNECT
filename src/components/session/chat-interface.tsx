@@ -142,8 +142,18 @@ export function ChatInterface({
     }
   }, [messages, durationMinutes]);
 
+  // ── Main countdown timer tick ───────────────────────────────────
+  // Pauses while AI is typing or sending message
   useEffect(() => {
-    if (remainingSeconds === null || remainingSeconds <= 0) return;
+    if (
+      preview ||
+      remainingSeconds === null ||
+      remainingSeconds <= 0 ||
+      aiTyping ||
+      sending
+    ) {
+      return;
+    }
     const id = setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev === null) return null;
@@ -151,7 +161,7 @@ export function ChatInterface({
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [remainingSeconds]);
+  }, [remainingSeconds, aiTyping, sending, preview]);
 
   // ── Per-question countdown timer ───────────────────────────────
   const [questionRemainingSeconds, setQuestionRemainingSeconds] =
@@ -203,7 +213,9 @@ export function ChatInterface({
     return () => clearInterval(id);
   }, [questionRemainingSeconds, aiTyping, sending, preview]);
 
-  // ── Auto-advance when per-question timer expires ───────────────
+  // ── Question timer expiration ────────────────────────────────
+  // Per requirement: question navigation is strictly manual.
+  // The system does NOT auto-skip or auto-advance when questionRemainingSeconds reaches 0.
   useEffect(() => {
     if (
       preview ||
@@ -217,17 +229,8 @@ export function ChatInterface({
     }
 
     questionTimerExpiredRef.current = true;
-
-    if (currentQuestion < interview.questions.length - 1) {
-      void handleQuestionTransition("next");
-    } else {
-      void handleFinishInterview();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     questionRemainingSeconds,
-    currentQuestion,
-    interview.questions.length,
     preview,
     sending,
     aiTyping,
@@ -1292,13 +1295,14 @@ export function ChatInterface({
           <div
             className={cn(
               "flex items-center gap-1.5",
-              isQuestionTimeLow ? "text-destructive" : "text-muted-foreground",
+              questionRemainingSeconds === 0 || isQuestionTimeLow ? "text-destructive" : "text-muted-foreground",
             )}
           >
             <Clock className="h-3.5 w-3.5" />
             <span>
-              Question: {formatTime(questionRemainingSeconds)}
-              {aiTyping && " (AI typing...)"}
+              {questionRemainingSeconds === 0
+                ? "Time's up · Advance when ready"
+                : `Question: ${formatTime(questionRemainingSeconds)}${aiTyping ? " (AI typing...)" : ""}`}
             </span>
           </div>
         )}
@@ -1307,11 +1311,18 @@ export function ChatInterface({
           <div
             className={cn(
               "flex items-center gap-1.5 border-l pl-3",
-              isTimeLow ? "text-destructive" : "text-muted-foreground",
+              aiTyping || sending
+                ? "text-amber-600 dark:text-amber-400"
+                : isTimeLow
+                  ? "text-destructive"
+                  : "text-muted-foreground",
             )}
           >
             <Clock className="h-3.5 w-3.5" />
-            <span>Interview: {formatTime(remainingSeconds)}</span>
+            <span>
+              Interview: {formatTime(remainingSeconds)}
+              {(aiTyping || sending) && " (Paused)"}
+            </span>
           </div>
         )}
       </div>
@@ -1432,15 +1443,18 @@ export function ChatInterface({
               <div
                 className={cn(
                   "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold tabular-nums",
-                  isQuestionTimeLow
-                    ? "border-destructive/30 bg-destructive/10 text-destructive"
-                    : "text-muted-foreground",
+                  questionRemainingSeconds === 0
+                    ? "border-destructive/40 bg-destructive/15 text-destructive"
+                    : isQuestionTimeLow
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "text-muted-foreground",
                 )}
               >
                 <Clock className="h-3.5 w-3.5" />
                 <span>
-                  Q: {formatTime(questionRemainingSeconds)}
-                  {aiTyping && " (typing...)"}
+                  {questionRemainingSeconds === 0
+                    ? "Time's up · Advance when ready"
+                    : `Q: ${formatTime(questionRemainingSeconds)}${aiTyping ? " (typing...)" : ""}`}
                 </span>
               </div>
             )}
@@ -1449,13 +1463,18 @@ export function ChatInterface({
               <div
                 className={cn(
                   "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold tabular-nums",
-                  isTimeLow
-                    ? "border-destructive/30 bg-destructive/10 text-destructive"
-                    : "text-muted-foreground",
+                  aiTyping || sending
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                    : isTimeLow
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "text-muted-foreground",
                 )}
               >
                 <Clock className="h-3.5 w-3.5" />
-                <span>Total: {formatTime(remainingSeconds)}</span>
+                <span>
+                  Total: {formatTime(remainingSeconds)}
+                  {(aiTyping || sending) && " (Paused)"}
+                </span>
               </div>
             )}
 

@@ -2,12 +2,13 @@
 
 import { createLogger } from "@/lib/logger";
 import {
-    getStoredCameraStream,
-    getStoredScreenStream,
-    setStoredCameraStream,
-    setStoredScreenStream,
-    wasCameraSkipped,
-    wasScreenSkipped,
+  clearStoredStreams,
+  getStoredCameraStream,
+  getStoredScreenStream,
+  setStoredCameraStream,
+  setStoredScreenStream,
+  wasCameraSkipped,
+  wasScreenSkipped,
 } from "@/lib/media-stream-store";
 import fixWebmDuration from "fix-webm-duration";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -217,10 +218,9 @@ export function useInterviewRecording({
   const acquireStreams = useCallback(async () => {
     if (!cameraStreamRef.current || !cameraStreamRef.current.active) {
       const storedCam = getStoredCameraStream();
-      if (storedCam) {
+      if (storedCam && storedCam.active) {
         setCameraStream(storedCam);
         cameraStreamRef.current = storedCam;
-        setStoredCameraStream(null);
       } else if (!wasCameraSkipped()) {
         try {
           const cam = await navigator.mediaDevices.getUserMedia({
@@ -228,6 +228,7 @@ export function useInterviewRecording({
           });
           setCameraStream(cam);
           cameraStreamRef.current = cam;
+          setStoredCameraStream(cam);
         } catch (err) {
           log.warn("Camera not available:", err);
         }
@@ -236,14 +237,14 @@ export function useInterviewRecording({
 
     if (!screenStreamRef.current || !screenStreamRef.current.active) {
       const storedScreen = getStoredScreenStream();
-      if (storedScreen) {
+      if (storedScreen && storedScreen.active) {
         setScreenStream(storedScreen);
         screenStreamRef.current = storedScreen;
-        setStoredScreenStream(null);
 
         storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
           setScreenStream(null);
           screenStreamRef.current = null;
+          setStoredScreenStream(null);
         });
       } else if (!wasScreenSkipped()) {
         try {
@@ -252,10 +253,12 @@ export function useInterviewRecording({
           });
           setScreenStream(screen);
           screenStreamRef.current = screen;
+          setStoredScreenStream(screen);
 
           screen.getVideoTracks()[0]?.addEventListener("ended", () => {
             setScreenStream(null);
             screenStreamRef.current = null;
+            setStoredScreenStream(null);
           });
         } catch (err) {
           log.warn("Screen share not available:", err);
@@ -271,19 +274,18 @@ export function useInterviewRecording({
   useEffect(() => {
     if (!enabled) return;
     const storedCam = getStoredCameraStream();
-    if (storedCam && !cameraStreamRef.current) {
+    if (storedCam && storedCam.active && (!cameraStreamRef.current || !cameraStreamRef.current.active)) {
       setCameraStream(storedCam);
       cameraStreamRef.current = storedCam;
-      setStoredCameraStream(null);
     }
     const storedScreen = getStoredScreenStream();
-    if (storedScreen && !screenStreamRef.current) {
+    if (storedScreen && storedScreen.active && (!screenStreamRef.current || !screenStreamRef.current.active)) {
       setScreenStream(storedScreen);
       screenStreamRef.current = storedScreen;
-      setStoredScreenStream(null);
       storedScreen.getVideoTracks()[0]?.addEventListener("ended", () => {
         setScreenStream(null);
         screenStreamRef.current = null;
+        setStoredScreenStream(null);
       });
     }
     bindHiddenVideos();
@@ -708,6 +710,7 @@ export function useInterviewRecording({
     mixDestRef.current = null;
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    clearStoredStreams();
     setCameraStream(null);
     setScreenStream(null);
 
@@ -851,6 +854,7 @@ export function useInterviewRecording({
       }
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      clearStoredStreams();
       try { micSourceRef.current?.disconnect(); } catch { /* already disconnected */ }
       micSourceRef.current = null;
       const context = mixCtxRef.current;
@@ -888,8 +892,10 @@ export function useInterviewRecording({
       if (mixContext && mixContext.state !== "closed") {
         void mixContext.close().catch((error) => log.warn("Audio mixer context close failed", error));
       }
-      cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
-      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      // Note: We do NOT stop cameraStream or screenStream tracks on unmount here,
+      // as doing so terminates the user-granted tracks during React Strict Mode
+      // re-mount cycles and page transitions. Tracks are cleanly stopped in stop()
+      // when the session actually finishes.
       if (cameraVideoRef.current) { cameraVideoRef.current.remove(); cameraVideoRef.current = null; }
       if (screenVideoRef.current) { screenVideoRef.current.remove(); screenVideoRef.current = null; }
     };

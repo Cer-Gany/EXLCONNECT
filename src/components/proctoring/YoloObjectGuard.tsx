@@ -2,6 +2,11 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FilesetResolver, ObjectDetector } from "@mediapipe/tasks-vision";
+import { suppressMediaPipeConsoleErrors } from "./suppress-mediapipe-logs";
+
+if (typeof window !== "undefined") {
+  suppressMediaPipeConsoleErrors();
+}
 
 interface YoloGuardProps {
   onObjectDetected?: (objectName: string) => void;
@@ -30,6 +35,7 @@ export default function YoloObjectGuard({
   }, [onObjectDetected]);
 
   useEffect(() => {
+    suppressMediaPipeConsoleErrors();
     if (!enabled) return;
     let active = true;
     let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -59,7 +65,11 @@ export default function YoloObjectGuard({
         }
 
         if (!active) {
-          detector.close();
+          try {
+            detector.close();
+          } catch {
+            // ignore
+          }
           return;
         }
 
@@ -74,7 +84,13 @@ export default function YoloObjectGuard({
             ) as HTMLVideoElement | null) ??
             (document.querySelector("video") as HTMLVideoElement | null);
 
-          if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) {
+          if (
+            !videoEl ||
+            videoEl.readyState < 2 ||
+            videoEl.videoWidth === 0 ||
+            videoEl.paused ||
+            videoEl.ended
+          ) {
             return;
           }
 

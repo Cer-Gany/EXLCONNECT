@@ -17,7 +17,10 @@ export function setStoredCameraStream(stream: MediaStream | null) {
 }
 
 export function getStoredCameraStream(): MediaStream | null {
-  if (cameraStream && cameraStream.active) return cameraStream;
+  if (cameraStream && cameraStream.active) {
+    const hasLive = cameraStream.getVideoTracks().some((t) => t.readyState === "live");
+    if (hasLive) return cameraStream;
+  }
   cameraStream = null;
   return null;
 }
@@ -36,7 +39,10 @@ export function setStoredScreenStream(stream: MediaStream | null) {
 }
 
 export function getStoredScreenStream(): MediaStream | null {
-  if (screenStream && screenStream.active) return screenStream;
+  if (screenStream && screenStream.active) {
+    const hasLive = screenStream.getVideoTracks().some((t) => t.readyState === "live");
+    if (hasLive) return screenStream;
+  }
   screenStream = null;
   return null;
 }
@@ -47,4 +53,15 @@ export function setScreenSkipped(skipped: boolean) {
 
 export function wasScreenSkipped(): boolean {
   return screenSkipped;
+}
+
+export function clearStoredStreams() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((t) => t.stop());
+    cameraStream = null;
+  }
+  if (screenStream) {
+    screenStream.getTracks().forEach((t) => t.stop());
+    screenStream = null;
+  }
 }

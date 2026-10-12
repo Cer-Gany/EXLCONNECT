@@ -2,6 +2,11 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
+import { suppressMediaPipeConsoleErrors } from "./suppress-mediapipe-logs";
+
+if (typeof window !== "undefined") {
+  suppressMediaPipeConsoleErrors();
+}
 
 interface MediaPipeGuardProps {
   onViolation?: (violation: string) => void;
@@ -33,8 +38,10 @@ export default function MediaPipeGuard({
   }, [onViolation]);
 
   useEffect(() => {
+    suppressMediaPipeConsoleErrors();
     if (!enabled) return;
     let active = true;
+    const videoEl = videoRef.current;
 
     const emitViolation = (type: string, message: string) => {
       if (violationStreakRef.current.type === type) {
@@ -70,6 +77,8 @@ export default function MediaPipeGuard({
           landmarker &&
           vid.readyState >= 2 &&
           vid.videoWidth > 0 &&
+          !vid.paused &&
+          !vid.ended &&
           vid.currentTime !== lastTime
         ) {
           lastTime = vid.currentTime;
@@ -119,12 +128,17 @@ export default function MediaPipeGuard({
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
+          const onReady = () => {
             if (!active) return;
             void videoRef.current?.play().catch(() => {});
             setStatus("Face Tracking Active");
             startDetectLoop();
           };
+          if (videoRef.current.readyState >= 1) {
+            onReady();
+          } else {
+            videoRef.current.onloadedmetadata = onReady;
+          }
         }
       } catch {
         if (active) setStatus("Webcam error");
@@ -161,7 +175,11 @@ export default function MediaPipeGuard({
         }
 
         if (!active) {
-          landmarker.close();
+          try {
+            landmarker.close();
+          } catch {
+            // ignore
+          }
           return;
         }
 
@@ -191,6 +209,9 @@ export default function MediaPipeGuard({
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
+      }
+      if (videoEl) {
+        videoEl.onloadedmetadata = null;
       }
     };
   }, [enabled]);

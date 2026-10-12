@@ -778,14 +778,17 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     return !!geminiSession && geminiReady && !reconnecting;
   }
 
-  /** Send realtime text. The model treats this as user input and RESPONDS. */
+  /** Send text turn to Gemini. The model treats this as completed user input and RESPONDS with audio. */
   function gSend(text: string): boolean {
     if (!gemOk()) return false;
     try {
-      geminiSession!.sendRealtimeInput({ text });
+      geminiSession!.sendClientContent({
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true,
+      });
       return true;
     } catch (err) {
-      log.error("Gemini sendRealtimeInput(text) failed:", err);
+      log.error("Gemini sendClientContent(text) failed:", err);
       return false;
     }
   }
@@ -1452,20 +1455,23 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
         noteAssistantTurnAgainstFollowUpBudget();
       }
       send({ type: "tts_ended" });
-    } else if (hadTts) {
-      log.info(`TTS had no audio (0B): ${JSON.stringify(capturedModelText)}`);
-    } else if (
-      !hadToolCall &&
-      lastUserInput === 0 &&
-      !interviewDone &&
-      !pendingQuestionPrompt &&
-      !isTransitioning &&
-      greetingRetries < 2 &&
-      initialGreetingText
-    ) {
-      greetingRetries++;
-      log.warn(`Greeting produced no output — retry ${greetingRetries}/2`);
-      gSend(initialGreetingText);
+    } else {
+      if (hadTts) {
+        log.info(`TTS had no audio (0B): ${JSON.stringify(capturedModelText)}`);
+      }
+      if (
+        !hadToolCall &&
+        lastUserInput === 0 &&
+        !interviewDone &&
+        !pendingQuestionPrompt &&
+        !isTransitioning &&
+        greetingRetries < 2 &&
+        initialGreetingText
+      ) {
+        greetingRetries++;
+        log.warn(`Greeting produced no audio (${ttsBytes}B) — retry ${greetingRetries}/2`);
+        gSend(initialGreetingText);
+      }
     }
 
     if (completedFarewellTurn) {
