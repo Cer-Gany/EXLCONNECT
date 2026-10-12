@@ -1079,7 +1079,12 @@ function SessionDetail({
                           content: String(m.content ?? ""),
                           source: m.transcription === "chat" ? ("chat" as const) : ("voice" as const),
                         }));
-                      const liveMessages =
+                      const liveMessages: Array<{
+                        id: string;
+                        role: "user" | "assistant";
+                        content: string;
+                        source?: "voice" | "chat";
+                      }> =
                         liveState?.messages && liveState.messages.length >= dbMessages.length
                           ? liveState.messages
                           : dbMessages;
@@ -1251,7 +1256,34 @@ function SessionDetail({
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {questionEvaluations.map((qe, i) => (
+                  {questionEvaluations.map((qe, i) => {
+                    const toDisplayList = (value: unknown): string[] => {
+                      if (Array.isArray(value)) {
+                        return value
+                          .filter((item) => item !== null && item !== undefined)
+                          .map((item) =>
+                            typeof item === "string" ? item : JSON.stringify(item),
+                          );
+                      }
+                      if (typeof value === "string" && value.trim()) {
+                        return [value];
+                      }
+                      if (value && typeof value === "object") {
+                        return Object.values(value as Record<string, unknown>)
+                          .filter(
+                            (item) =>
+                              typeof item === "string" ||
+                              typeof item === "number",
+                          )
+                          .map(String);
+                      }
+                      return [];
+                    };
+
+                    const highlights = toDisplayList(qe.highlights);
+                    const improvements = toDisplayList(qe.improvements);
+
+                    return (
                     <div key={i} className="space-y-3 rounded-lg border p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1">
@@ -1270,25 +1302,25 @@ function SessionDetail({
                         {qe.evaluation}
                       </p>
                       <div className="grid gap-4 sm:grid-cols-2">
-                        {qe.highlights && qe.highlights.length > 0 && (
+                        {highlights.length > 0 && (
                           <div>
                             <p className="mb-1 text-xs font-medium text-secondary-600 dark:text-secondary-400">
                               Strengths
                             </p>
                             <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-                              {qe.highlights.map((h, j) => (
+                              {highlights.map((h, j) => (
                                 <li key={j}>{String(h)}</li>
                               ))}
                             </ul>
                           </div>
                         )}
-                        {qe.improvements && qe.improvements.length > 0 && (
+                        {improvements.length > 0 && (
                           <div>
                             <p className="mb-1 text-xs font-medium text-tertiary-600 dark:text-tertiary-300">
                               Areas for Improvement
                             </p>
                             <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-                              {qe.improvements.map((imp, j) => (
+                              {improvements.map((imp, j) => (
                                 <li key={j}>{String(imp)}</li>
                               ))}
                             </ul>
@@ -1296,7 +1328,8 @@ function SessionDetail({
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </CardContent>
               </Card>
             )}
@@ -1757,11 +1790,12 @@ function SessionDetail({
 
             {/* Audio recordings remain visible while playback loads. */}
             {(() => {
-              const recordings = summary.data?.audioRecordings?.length
-                ? summary.data.audioRecordings
-                : summary.data?.audioRecordingUrl
-                  ? [{ url: summary.data.audioRecordingUrl, segmentIndex: 0 }]
-                  : [];
+              const recordings: Array<{ url: string; segmentIndex: number }> =
+                summary.data?.audioRecordings?.length
+                  ? summary.data.audioRecordings
+                  : summary.data?.audioRecordingUrl
+                    ? [{ url: summary.data.audioRecordingUrl, segmentIndex: 0 }]
+                    : [];
               if (!recordings.length) return null;
               return (
                 <Card>
