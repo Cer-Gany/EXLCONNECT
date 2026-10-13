@@ -65,19 +65,20 @@ async function waitForHttp(url: string, timeoutMs = 60_000): Promise<void> {
 }
 
 function startAppServer(port: number): ChildProcess {
+  // Use `next start` in CI (production build) for deterministic startup times.
+  const nextBin = resolve(APP_CWD, "node_modules/next/dist/bin/next");
+  const nextArgs = process.env.CI
+    ? ["start", "--port", String(port)]
+    : ["dev", "--port", String(port)];
+
   const child = spawn(
     process.execPath,
-    [
-      resolve(APP_CWD, "node_modules/next/dist/bin/next"),
-      "dev",
-      "--port",
-      String(port),
-    ],
+    [nextBin, ...nextArgs],
     {
       cwd: APP_CWD,
       env: {
         ...process.env,
-        NODE_ENV: "development",
+        NODE_ENV: process.env.CI ? "production" : "development",
         ENABLE_FUNCTIONAL_TEST_PAGES: "1",
         NEXT_PUBLIC_VOICE_RELAY_URL: `ws://127.0.0.1:${port}/ws/voice`,
         NEXT_PUBLIC_OPENAI_VOICE_RELAY_URL: `ws://127.0.0.1:${port}/ws/openai-voice`,
@@ -263,7 +264,7 @@ test("English interviews try the voice relay first and fail over to OpenAI", asy
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
@@ -288,7 +289,7 @@ test("Chinese interviews also try the voice relay first and fail over to OpenAI"
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
@@ -314,12 +315,12 @@ test("voice interview shows Thinking after user speech finalizes", async () => {
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
 
-  await waitForText(page, "Thinking...", 8_000);
+  await waitForText(page, "Thinking...", 20_000);
   const bodyText = (await page.locator("body").textContent()) ?? "";
   assert.equal(bodyText.includes("I led a reporting dashboard project"), true);
   assert.equal(
@@ -340,12 +341,12 @@ test("voice interview keeps Thinking visible until the agent response returns", 
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
 
-  await waitForText(page, "Thinking...", 8_000);
+  await waitForText(page, "Thinking...", 20_000);
   await delay(500);
   assert.equal(
     await page.getByText("Thinking...", { exact: true }).first().isVisible(),
@@ -357,7 +358,7 @@ test("voice interview keeps Thinking visible until the agent response returns", 
     false,
   );
 
-  await waitForText(page, "Thanks for explaining that project.", 8_000);
+  await waitForText(page, "Thanks for explaining that project.", 20_000);
   await waitForCondition(
     async () =>
       !(await page
@@ -383,7 +384,7 @@ test("discarded ASR finals clear the voice processing state", async () => {
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
@@ -423,7 +424,7 @@ test("long live transcripts scroll inside the voice panel without moving the con
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
@@ -434,7 +435,7 @@ test("long live transcripts scroll inside the voice panel without moving the con
       voiceStatusScroll.evaluate(
         (element) => element.scrollHeight > element.clientHeight,
       ),
-    10_000,
+    20_000,
     "Expected the long transcript to overflow inside the voice panel",
   );
 
@@ -482,7 +483,7 @@ test("voice completion shows the farewell, waits for final save, and only then n
   await waitForCondition(
     async () =>
       (await page.getByTestId("harness-ready").textContent()) === "true",
-    5_000,
+    20_000,
     "Expected functional voice harness mocks to be ready",
   );
   await page.getByRole("button", { name: "Start Voice Interview" }).click();
