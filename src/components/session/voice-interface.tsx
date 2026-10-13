@@ -1440,11 +1440,9 @@ export function VoiceInterface({
     };
 
     try {
-      // Immediately persist final transcript messages and mark session COMPLETED
-      // so the recruiter dashboard reflects COMPLETED right away.
+      // Persist final voice messages before reporting completion to the parent.
       await Promise.allSettled([
         withTimeout(voice.disconnect(), 5000, "disconnect and complete voice session"),
-        withTimeout(markSessionCompletedOnServer(), 5000, "mark session completed"),
         withTimeout(saveAllDrawings(), 5000, "save drawings"),
         withTimeout(saveAllCodeSnippets(), 5000, "save code snippets"),
       ]);
@@ -1487,7 +1485,10 @@ export function VoiceInterface({
         console.error("[voice] Failed to save recording:", err);
       }
 
-      await markSessionCompletedOnServer();
+      // The final voice save carries complete: true. Marking the session through
+      // the safety-net endpoint is best-effort and must not delay the parent's
+      // completion callback after that final save has resolved.
+      void markSessionCompletedOnServer();
     } catch (err) {
       console.error("[voice] Failed to end interview cleanly:", err);
     } finally {
@@ -1903,8 +1904,8 @@ export function VoiceInterface({
         aiState: s.aiState,
         currentQuestionIndex: s.currentQuestionIndex,
         currentQuestionText: s.currentQuestionText,
-        userTranscript: s.userTranscript,
-        aiTranscript: s.aiTranscript,
+        userTranscript: s.userTranscript.slice(-4000),
+        aiTranscript: s.aiTranscript.slice(-4000),
         activeTool: s.activeTool,
         codeSnippet,
         messages: s.messages.slice(-80).map((m) => ({
@@ -2490,6 +2491,12 @@ export function VoiceInterface({
                   </div>
                 )}
               </div>
+
+              {(voice.userTranscript || voice.aiTranscript) && (
+                <div className="w-full max-w-3xl shrink-0 px-6 pb-6 text-center text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                  {voice.userTranscript || voice.aiTranscript}
+                </div>
+              )}
 
               {!voice.isConnected && !preview && (
                 <Button
