@@ -149,6 +149,15 @@ test("Same-origin voice relay URL derives a same-origin OpenAI relay path", () =
   assert.equal(urls.openAiRelayUrl, "wss://aural-ai.com/ws/openai-voice");
 });
 
+test("voice relay URLs with a port derive the OpenAI port and endpoint path", () => {
+  const urls = resolveRelayUrls({
+    voiceRelayUrl: "ws://127.0.0.1:8766/ws/voice",
+  });
+
+  assert.equal(urls.voiceRelayUrl, "ws://127.0.0.1:8766/ws/voice");
+  assert.equal(urls.openAiRelayUrl, "ws://127.0.0.1:8767/ws/openai-voice");
+});
+
 test("RelayConnector falls back to the secondary relay when the primary never becomes ready", async () => {
   const sockets: FakeSocket[] = [];
   const connector = new RelayConnector<Record<string, unknown>>({

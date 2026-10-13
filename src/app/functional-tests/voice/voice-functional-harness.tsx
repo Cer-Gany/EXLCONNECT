@@ -13,7 +13,6 @@ type FunctionalScenario = Record<string, { events: FunctionalRelayEvent[] }>;
 type FunctionalScenarioId =
   | "default"
   | "english-failover"
-  | "chinese-failover"
   | "farewell-complete"
   | "thinking-after-asr"
   | "thinking-until-response"
@@ -47,14 +46,6 @@ const functionalScenarios: Record<FunctionalScenarioId, FunctionalScenario> = {
     },
   },
   "english-failover": {
-    "/ws/voice": {
-      events: [{ type: "close", delay: 30 }],
-    },
-    "/ws/openai-voice": {
-      events: [{ type: "ready", delay: 30 }],
-    },
-  },
-  "chinese-failover": {
     "/ws/voice": {
       events: [{ type: "close", delay: 30 }],
     },

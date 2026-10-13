@@ -165,6 +165,12 @@ export function resolveRelayUrls(options: RelayUrlOptions): {
             pathname: DEFAULT_OPENAI_RELAY_PATH,
           });
         }
+        if (voiceUrl.pathname === DEFAULT_VOICE_RELAY_PATH) {
+          return deriveSiblingRelayUrl(voiceRelayUrl, {
+            port: DEFAULT_OPENAI_RELAY_PORT,
+            pathname: DEFAULT_OPENAI_RELAY_PATH,
+          });
+        }
         return deriveSiblingRelayUrl(voiceRelayUrl, {
           port: DEFAULT_OPENAI_RELAY_PORT,
         });
