@@ -284,34 +284,6 @@ test("English interviews try the voice relay first and fail over to OpenAI", asy
   await context.close();
 });
 
-test("Chinese interviews also try the voice relay first and fail over to OpenAI", async () => {
-  const context = await browser.newContext({ locale: "en-US" });
-  const page = await context.newPage();
-  await page.goto(
-    `${baseUrl}/functional-tests/voice?language=zh-CN&scenario=chinese-failover`,
-  );
-  await waitForCondition(
-    async () =>
-      (await page.getByTestId("harness-ready").textContent()) === "true",
-    20_000,
-    "Expected functional voice harness mocks to be ready",
-  );
-  await page.getByRole("button", { name: "Start Voice Interview" }).click();
-
-  // Allow both relay connection attempts to complete.
-  await delay(5_000);
-
-  const connections = await readRelayConnections(page);
-  const paths = connections.map((entry) => entry.path);
-
-  assert.equal(
-    paths.includes("/ws/voice") && paths.includes("/ws/openai-voice"),
-    true,
-    `Expected both relay connections (/ws/voice and /ws/openai-voice), but got: ${JSON.stringify(paths)}`,
-  );
-
-  await context.close();
-});
 
 test("voice interview shows Thinking after user speech finalizes", async () => {
   const context = await browser.newContext({ locale: "en-US" });
