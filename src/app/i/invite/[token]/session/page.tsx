@@ -11,6 +11,7 @@ import {
     type SessionEndReason,
     type SessionEndReasonInput,
 } from "@/components/session/session-ended-screen";
+import type { InterviewContext } from "@/hooks/use-voice";
 import { buildSessionResumeState } from "@/lib/session-resume";
 import { trpc } from "@/lib/trpc/client";
 import dynamic from "next/dynamic";
@@ -103,7 +104,7 @@ export default function InviteSessionPage() {
   const useVoice = interview.voiceEnabled;
 
   if (useVoice) {
-    const interviewContext = {
+    const interviewContext: InterviewContext = {
       title: interview.title,
       objective: interview.objective,
       aiName: interview.aiName,
@@ -111,7 +112,10 @@ export default function InviteSessionPage() {
       language: interview.language,
       followUpDepth: interview.followUpDepth,
       startQuestionIndex: resume.hasQuestion ? resume.questionIndex : undefined,
+      sessionId: session.id,
+      adaptiveMode: !!(interview as any).adaptiveMode,
       questions: interview.questions.map((q: any) => ({
+        id: q.id,
         text: q.text,
         type: q.type,
         description: q.description,
@@ -119,6 +123,9 @@ export default function InviteSessionPage() {
         starterCode: q.starterCode as { language: string; code: string } | null,
         order: q.order,
         timeLimitSeconds: q.timeLimitSeconds,
+        difficultyLevel: q.difficultyLevel ?? 5,
+        skillTag: q.skillTag ?? null,
+        competencyGroup: q.competencyGroup ?? null,
       })),
     };
 

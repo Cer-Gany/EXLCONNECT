@@ -183,7 +183,7 @@ export default function SlugSessionPage() {
   }
 
   if (useVoice) {
-    const interviewContext = {
+    const interviewContext: InterviewContext = {
       title: interview.data.title,
       objective: interview.data.objective,
       aiName: interview.data.aiName,
@@ -191,7 +191,10 @@ export default function SlugSessionPage() {
       language: interview.data.language,
       followUpDepth: interview.data.followUpDepth,
       startQuestionIndex: resume.hasQuestion ? resume.questionIndex : undefined,
+      sessionId: sessionId!,
+      adaptiveMode: !!(interview.data as any).adaptiveMode,
       questions: interview.data.questions.map((q: any) => ({
+        id: q.id,
         text: q.text,
         type: q.type,
         description: q.description,
@@ -199,6 +202,9 @@ export default function SlugSessionPage() {
         starterCode: q.starterCode as { language: string; code: string } | null,
         order: q.order,
         timeLimitSeconds: q.timeLimitSeconds,
+        difficultyLevel: q.difficultyLevel ?? 5,
+        skillTag: q.skillTag ?? null,
+        competencyGroup: q.competencyGroup ?? null,
       })),
     };
 

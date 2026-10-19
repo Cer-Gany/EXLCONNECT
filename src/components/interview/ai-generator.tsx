@@ -61,6 +61,7 @@ import {
 } from "@/components/ui/popover";
 import {
     ArrowRight,
+    Brain,
     BrainCircuit,
     Briefcase,
     Check,
@@ -268,6 +269,9 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
   const [followUpDepth, setFollowUpDepth] = useState<"LIGHT" | "MODERATE" | "DEEP">("MODERATE");
   const [language, setLanguage] = useState("en");
   const [antiCheatingEnabled, setAntiCheatingEnabled] = useState(false);
+  const [adaptivePool, setAdaptivePool] = useState(false);
+  const [poolSizePreset, setPoolSizePreset] = useState<"standard" | "adaptive_12" | "adaptive_16" | "custom">("standard");
+  const [customQuestionCount, setCustomQuestionCount] = useState("8");
   const [generating, setGenerating] = useState(false);
   const [streamPhase, setStreamPhase] = useState<"idle" | "thinking" | "writing">("idle");
   const [thinkingText, setThinkingText] = useState("");
@@ -438,6 +442,10 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
     setFeedback("");
 
     try {
+      const targetCount = adaptivePool
+        ? (poolSizePreset === "adaptive_16" ? 16 : 12)
+        : (poolSizePreset === "custom" ? Number(customQuestionCount) : undefined);
+
       const response = await fetch("/api/ai/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -447,6 +455,8 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
           language: LANGUAGES.find((l) => l.value === language)?.label ?? language,
           organizationId: currentOrg?.id,
           projectId,
+          adaptivePool,
+          questionCount: targetCount,
           ...(jdText && { jobDescription: jdText }),
           ...(resumeText && { resumeText }),
         }),
@@ -459,6 +469,9 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
 
       const data = await consumeStream(response);
       setResult(data);
+      if (data.recommendedSettings?.adaptiveMode !== undefined) {
+        setAdaptivePool(Boolean(data.recommendedSettings.adaptiveMode));
+      }
       setEditableCriteria(data.assessmentCriteria ?? []);
       setEditableQuestions(data.questions.map((q, i) => ({
         ...q,
@@ -550,6 +563,7 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
         followUpDepth,
         antiCheatingEnabled,
         timeLimitMinutes: Number(duration) || undefined,
+        adaptiveMode: adaptivePool,
       });
 
       await Promise.all(
@@ -565,6 +579,9 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
             options: q.options ?? undefined,
             followUpPrompts: q.followUpPrompts ?? undefined,
             starterCode: q.type === "CODING" && q.starterCode ? q.starterCode : undefined,
+            difficultyLevel: typeof q.difficultyLevel === "number" ? q.difficultyLevel : 5,
+            skillTag: q.skillTag ?? undefined,
+            competencyGroup: q.competencyGroup ?? undefined,
           })
         )
       );
@@ -910,7 +927,7 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
               );
             })()}
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="space-y-2">
               <Label htmlFor="duration">Duration (min)</Label>
               <Input
@@ -967,6 +984,107 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Question Pool & Routing Mode */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5 text-sm font-medium">
+              <Brain className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+              Interview Routing & Question Pool
+            </Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Standard linear card */}
+              <div
+                onClick={() => {
+                  setAdaptivePool(false);
+                  setPoolSizePreset("standard");
+                }}
+                className={cn(
+                  "cursor-pointer rounded-lg border p-3.5 transition-all",
+                  !adaptivePool
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "hover:border-primary/40 bg-card",
+                )}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-medium text-sm">Standard Linear</span>
+                  <Badge variant={!adaptivePool ? "default" : "outline"} className="text-[11px]">
+                    5–6 Questions
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Fixed sequence. All candidates answer the same questions in order. Best for standard linear screening.
+                </p>
+              </div>
+
+              {/* Adaptive Testing Pool card */}
+              <div
+                onClick={() => {
+                  setAdaptivePool(true);
+                  if (poolSizePreset === "standard") setPoolSizePreset("adaptive_12");
+                }}
+                className={cn(
+                  "cursor-pointer rounded-lg border p-3.5 transition-all relative overflow-hidden",
+                  adaptivePool
+                    ? "border-purple-500 bg-purple-500/5 ring-1 ring-purple-500"
+                    : "hover:border-purple-500/40 bg-card",
+                )}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                    <span className="font-medium text-sm">Adaptive Testing Pool</span>
+                  </div>
+                  <Badge
+                    className={cn(
+                      "text-[11px]",
+                      adaptivePool
+                        ? "bg-purple-600 hover:bg-purple-600 text-white"
+                        : "border-purple-200 text-purple-700 dark:text-purple-300",
+                    )}
+                    variant={adaptivePool ? "default" : "outline"}
+                  >
+                    12 Qs Pool
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Calibrated Easy, Medium, and Hard tiers per competency. Dynamic ability routing in real-time.
+                </p>
+              </div>
+            </div>
+
+            {/* Sub-selector for pool size when adaptive is chosen */}
+            {adaptivePool && (
+              <div className="flex items-center justify-between rounded-lg border border-purple-200/60 bg-purple-50/40 dark:border-purple-900/40 dark:bg-purple-950/20 px-3.5 py-2 text-xs">
+                <span className="text-muted-foreground">Adaptive Pool Size:</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPoolSizePreset("adaptive_12")}
+                    className={cn(
+                      "rounded px-2.5 py-1 font-medium transition-colors",
+                      poolSizePreset === "adaptive_12"
+                        ? "bg-purple-600 text-white"
+                        : "bg-background hover:bg-muted text-muted-foreground",
+                    )}
+                  >
+                    12 Questions (Balanced Matrix)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPoolSizePreset("adaptive_16")}
+                    className={cn(
+                      "rounded px-2.5 py-1 font-medium transition-colors",
+                      poolSizePreset === "adaptive_16"
+                        ? "bg-purple-600 text-white"
+                        : "bg-background hover:bg-muted text-muted-foreground",
+                    )}
+                  >
+                    16 Questions (Deep Pool)
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <Label>Communication Channels</Label>
@@ -1129,7 +1247,7 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
           <CardHeader>
             <CardTitle>{result.title}</CardTitle>
             <CardDescription>{result.objective}</CardDescription>
-            <div className="flex gap-2 pt-2">
+            <div className="flex flex-wrap gap-2 pt-2">
               {chatEnabled && <Badge>Chat</Badge>}
               {voiceEnabled && <Badge>Voice</Badge>}
               {videoEnabled && <Badge>Video</Badge>}
@@ -1140,9 +1258,37 @@ export function AIGenerator({ projectId }: { projectId?: string } = {}) {
               <Badge variant="secondary">
                 {editableQuestions.length} questions
               </Badge>
+              {adaptivePool && (
+                <Badge className="bg-purple-600 hover:bg-purple-600 text-white gap-1">
+                  <Brain className="h-3 w-3" />
+                  Adaptive Pool Active
+                </Badge>
+              )}
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            {/* Adaptive Pool Matrix Breakdown */}
+            {adaptivePool && (
+              <div className="rounded-lg border border-purple-200 bg-purple-50/50 dark:border-purple-900/50 dark:bg-purple-950/20 p-3.5 text-xs text-purple-900 dark:text-purple-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-600 shrink-0" />
+                  <span>
+                    <strong>Adaptive Testing Pool:</strong> Multi-tier pool generated. Candidates will be served ~4–6 questions routed dynamically based on live ability estimates.
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px]">
+                  <span className="text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded font-medium">
+                    Easy: {editableQuestions.filter((q) => (q.difficultyLevel ?? 5) <= 3).length}
+                  </span>
+                  <span className="text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/60 px-2 py-0.5 rounded font-medium">
+                    Med: {editableQuestions.filter((q) => (q.difficultyLevel ?? 5) >= 4 && (q.difficultyLevel ?? 5) <= 7).length}
+                  </span>
+                  <span className="text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/60 px-2 py-0.5 rounded font-medium">
+                    Hard: {editableQuestions.filter((q) => (q.difficultyLevel ?? 5) >= 8).length}
+                  </span>
+                </div>
+              </div>
+            )}
             {/* Questions sub-section */}
             <div className="space-y-3">
               <Label className="flex items-center gap-1.5 text-sm font-medium">

@@ -5,6 +5,8 @@ import { createLogger } from "@/lib/logger";
 import { buildSummaryPrompt } from "@/lib/ai/prompts/summary";
 import { getProvider, REPORT_MODEL } from "@/lib/ai/registry";
 import { getAuthUser } from "@/lib/auth";
+import { buildAdaptiveReport, DEFAULT_ADAPTIVE_CONFIG } from "@/lib/adaptive";
+import type { AdaptiveConfig, LiveAdaptiveState } from "@/lib/adaptive/types";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 
@@ -165,14 +167,28 @@ export async function POST(req: Request) {
       insightsData.toneAnalysis = parsed.toneAnalysis;
     }
 
+    const updatePayload: Record<string, unknown> = {
+      summary: String(parsed.summary ?? ""),
+      themes: (parsed.themes as string[]) ?? [],
+      sentiment: parsed.sentiment ?? null,
+      insights: insightsData,
+    };
+
+    if (interviewSession.adaptiveState) {
+      try {
+        const liveState = interviewSession.adaptiveState as LiveAdaptiveState;
+        const poolSize = interview.questions.length;
+        const adaptiveConfig = ((interview as any).adaptiveConfig ?? DEFAULT_ADAPTIVE_CONFIG) as AdaptiveConfig;
+        const adaptiveReport = buildAdaptiveReport(liveState, poolSize, adaptiveConfig);
+        updatePayload.adaptiveReport = adaptiveReport;
+      } catch (err) {
+        log.warn("Failed to generate adaptive report during summarize:", err);
+      }
+    }
+
     await supabaseAdmin
       .from("sessions")
-      .update({
-        summary: String(parsed.summary ?? ""),
-        themes: (parsed.themes as string[]) ?? [],
-        sentiment: parsed.sentiment ?? null,
-        insights: insightsData,
-      })
+      .update(updatePayload)
       .eq("id", sessionId);
 
     return NextResponse.json(parsed);

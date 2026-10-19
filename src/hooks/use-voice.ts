@@ -39,15 +39,27 @@ export interface InterviewContext {
   language: string;
   followUpDepth: string;
   startQuestionIndex?: number;
+  /** Session ID — passed to relay for adaptive scoring API calls. */
+  sessionId?: string;
+  /** Whether adaptive testing mode is active for this interview. */
+  adaptiveMode?: boolean;
   questions: Array<{
-  text: string;
-  type: string;
-  description?: string | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  options?: any;
-  starterCode?: { language: string; code: string } | null;
-  order: number;
-  timeLimitSeconds?: number | null;
+    text: string;
+    type: string;
+    description?: string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    options?: any;
+    starterCode?: { language: string; code: string } | null;
+    order: number;
+    timeLimitSeconds?: number | null;
+    /** Adaptive: unique question ID from DB. */
+    id?: string;
+    /** Adaptive: difficulty 1–10. */
+    difficultyLevel?: number | null;
+    /** Adaptive: fine-grained skill tag. */
+    skillTag?: string | null;
+    /** Adaptive: broad competency group. */
+    competencyGroup?: string | null;
   }>;
 }
 

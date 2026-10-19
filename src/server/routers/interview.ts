@@ -328,6 +328,8 @@ export const interviewRouter = router({
         llmProvider: z.string().optional(),
         llmModel: z.string().optional(),
         antiCheatingEnabled: z.boolean().default(false),
+        adaptiveMode: z.boolean().default(false),
+        adaptiveConfig: z.any().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -505,6 +507,7 @@ export const interviewRouter = router({
           chatEnabled: template.chatEnabled,
           voiceEnabled: template.voiceEnabled,
           videoEnabled: template.videoEnabled,
+          adaptiveMode: template.adaptiveMode ?? false,
           timeLimitMinutes: template.timeLimitMinutes ?? null,
           projectId,
           userId: ctx.user.id,
@@ -530,6 +533,9 @@ export const interviewRouter = router({
           probeOnShort: q.probeOnShort ?? true,
           options: q.options ?? null,
           description: q.description ?? null,
+          difficultyLevel: q.difficultyLevel ?? 5,
+          skillTag: q.skillTag ?? null,
+          competencyGroup: q.competencyGroup ?? null,
         }));
 
         await ctx.supabase.from("questions").insert(questionRows);
@@ -566,6 +572,8 @@ export const interviewRouter = router({
         requireInvite: z.boolean().optional(),
         invitedEmails: z.array(z.string().email()).optional(),
         antiCheatingEnabled: z.boolean().optional(),
+        adaptiveMode: z.boolean().optional(),
+        adaptiveConfig: z.any().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

@@ -56,6 +56,7 @@ export interface GeneratedInterview {
     followUpDepth: "LIGHT" | "MODERATE" | "DEEP";
     aiTone: "CASUAL" | "PROFESSIONAL" | "FORMAL" | "FRIENDLY";
     aiName: string;
+    adaptiveMode?: boolean;
   };
 }
 
@@ -70,4 +71,8 @@ export interface GeneratedQuestion {
   followUpPrompts?: string[];
   /** Starter code template for CODING questions. */
   starterCode?: { language: string; code: string };
+  /** Adaptive calibration metadata generated with the question. */
+  difficultyLevel?: number;
+  skillTag?: string;
+  competencyGroup?: string;
 }

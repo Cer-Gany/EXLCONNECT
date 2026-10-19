@@ -6,6 +6,8 @@ export function buildGeneratorPrompt(
   language?: string,
   jobDescription?: string,
   resumeText?: string,
+  questionCount?: number,
+  adaptivePool?: boolean,
 ): LLMMessage[] {
   const languageInstruction = language && language !== "en"
     ? `\nLANGUAGE: All generated content (title, description, objective, assessment criteria names & descriptions, question texts & descriptions, follow-up prompts, and aiName) MUST be written in ${language}. Only the JSON keys and enum values (e.g. "OPEN_ENDED", "PROFESSIONAL") should remain in English.\n`
@@ -19,18 +21,34 @@ ${jobDescription && resumeText ? "- When both are provided, focus on the interse
 `
     : "";
 
+  const effectiveCount = questionCount ?? (adaptivePool ? 12 : undefined);
+
+  const adaptiveInstruction = adaptivePool
+    ? `\nADAPTIVE TESTING POOL SPECIFICATION:
+- This interview uses Computerized Adaptive Testing (CAT / GRE / GMAT style).
+- You MUST generate a calibrated question pool of exactly ${effectiveCount ?? 12} questions.
+- Distribute questions across 2 to 3 distinct competency groups (e.g. "technical", "system_design", "problem_solving", "behavioral").
+- For EACH competency group, you MUST provide an explicit difficulty tier distribution:
+  * 1 Easy/Foundational question (difficultyLevel 1 to 3)
+  * 2 Medium/Applied questions (difficultyLevel 4 to 7)
+  * 1 Hard/Expert or Edge-Case question (difficultyLevel 8 to 10)
+- In adaptive mode, an individual candidate will only be served 4 to 6 questions dynamically routed based on their live performance; the rest remain in the pool for branching.
+- Set recommendedSettings.adaptiveMode to true.
+`
+    : "";
+
   return [
     {
       role: "system",
       content: `You are an expert interview designer. Create a comprehensive interview structure based on the user's requirements.
-${languageInstruction}${contextInstruction}
+${languageInstruction}${contextInstruction}${adaptiveInstruction}
 TASK:
 Design a complete interview with:
 1. A compelling title
 2. A brief description (1-2 sentences summarizing the interview purpose)
 3. Clear objective statement
 4. 3-6 specific, measurable assessment criteria based on the interview objective
-5. 5-15 well-crafted questions in logical flow
+5. ${effectiveCount ? `Exactly ${effectiveCount}` : "5-15"} well-crafted questions in logical flow
 6. Recommended question types for each
 7. Optimal AI persona configuration
 
@@ -43,6 +61,8 @@ GUIDELINES:
 - For SINGLE_CHOICE and MULTIPLE_CHOICE questions, ALWAYS provide 2-6 clear option strings in the "options" field
 - For CODING questions, set "options" to null. Write a clear problem statement in the question text. Include a "starterCode" object with "language" and "code" fields containing a code template for the participant.
 - Assign a specific time limit to EVERY question using the "timeLimitSeconds" field. Never leave it null.
+- For every question, assign adaptive calibration metadata: difficultyLevel (1-10), skillTag (snake_case skill), and competencyGroup (broad area such as technical, behavioral, leadership, or problem_solving).
+- Use at least two competency groups when the interview covers multiple dimensions, and distribute questions across easy (1-3), medium (4-7), and hard (8-10) difficulty where the interview scope supports it.
 - Determine the time limit based on question difficulty, expected reasoning effort, response complexity, and question type.
 - For EASY conceptual, verbal, or choice-based questions, use approximately 45-60 seconds.
 - For MEDIUM conceptual, verbal, or choice-based questions, use approximately 60-90 seconds.
@@ -80,6 +100,9 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
       "type": "OPEN_ENDED" | "SINGLE_CHOICE" | "MULTIPLE_CHOICE" | "CODING" | "WHITEBOARD" | "RESEARCH",
       "description": "string (helper text for the question)",
       "timeLimitSeconds": number,
+      "difficultyLevel": number (integer 1-10),
+      "skillTag": "snake_case string",
+      "competencyGroup": "broad competency group string",
       "isRequired": true,
       "options": { "options": ["string", "string", ...], "allowMultiple": false } | null,
       "followUpPrompts": ["string"],
@@ -90,7 +113,8 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
     "mode": "CHAT" | "VOICE" | "HYBRID",
     "followUpDepth": "LIGHT" | "MODERATE" | "DEEP",
     "aiTone": "CASUAL" | "PROFESSIONAL" | "FORMAL" | "FRIENDLY",
-    "aiName": "string suggestion"
+    "aiName": "string suggestion",
+    "adaptiveMode": boolean
   }
 }`,
     },
@@ -101,6 +125,8 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
 "${description}"
 
 ${durationMinutes ? `Target duration: approximately ${durationMinutes} minutes.` : ""}
+${effectiveCount ? `Required question pool count: exactly ${effectiveCount} questions.` : ""}
+${adaptivePool ? "Please structure this as an adaptive testing pool with tiered difficulty (Easy, Medium, Hard) across competencies." : ""}
 ${jobDescription ? `\n--- JOB DESCRIPTION ---\n${jobDescription}\n--- END JOB DESCRIPTION ---\n` : ""}
 ${resumeText ? `\n--- CANDIDATE RESUME ---\n${resumeText}\n--- END CANDIDATE RESUME ---\n` : ""}
 Please generate the complete interview structure as JSON.`,
@@ -142,6 +168,7 @@ QUESTION TYPES:
 - "MULTIPLE_CHOICE": Participant can select more than one option. MUST include "options" with 2-6 option strings.
 - "CODING": A coding/programming question where the participant writes code. Set "options" to null.
 - "RESEARCH": A deep-dive question for extracting comprehensive information on a topic. Set "options" to null.
+- Preserve or improve each question's adaptive calibration metadata: difficultyLevel (integer 1-10), skillTag (snake_case), and competencyGroup (broad competency area).
 
 OUTPUT VALID JSON ONLY (no markdown, no explanation):
 {
@@ -159,6 +186,9 @@ OUTPUT VALID JSON ONLY (no markdown, no explanation):
       "type": "OPEN_ENDED" | "SINGLE_CHOICE" | "MULTIPLE_CHOICE" | "CODING" | "WHITEBOARD" | "RESEARCH",
       "description": "string (helper text for the question)",
       "timeLimitSeconds": number,
+      "difficultyLevel": number (integer 1-10),
+      "skillTag": "snake_case string",
+      "competencyGroup": "broad competency group string",
       "isRequired": true,
       "options": { "options": ["string", "string", ...], "allowMultiple": false } | null,
       "followUpPrompts": ["string"],

@@ -7,7 +7,8 @@ import {
     type LLMResponse,
 } from "../types";
 
-const DEFAULT_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_MODEL = "gemini-2.5-flash";
+const GEMINI_RESERVE_MODEL = "gemini-3.1-flash-lite";
 const MAX_RETRIES = 3;
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
@@ -133,36 +134,47 @@ export class GeminiProvider implements LLMProvider {
     params: GenerationParams & { model?: string },
   ): Promise<LLMResponse> {
     const client = this.ensureClient();
-    let model = params.model ?? this.defaultModel;
+    const primaryModel = params.model ?? this.defaultModel;
     const { systemInstruction, contents } = toGeminiRequest(params.messages);
 
-    let response: Awaited<ReturnType<typeof client.models.generateContent>> | null =
-      null;
+    const candidateModels = [
+      primaryModel,
+      ...(primaryModel !== GEMINI_RESERVE_MODEL ? [GEMINI_RESERVE_MODEL] : []),
+      ...(primaryModel !== this.defaultModel && this.defaultModel !== GEMINI_RESERVE_MODEL ? [this.defaultModel] : []),
+    ];
+
+    let response: Awaited<ReturnType<typeof client.models.generateContent>> | null = null;
     let lastError: unknown;
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        response = await client.models.generateContent({
-          model,
-          contents,
-          config: {
-            systemInstruction: systemInstruction || undefined,
-            temperature: params.temperature ?? 0.25,
-            maxOutputTokens: params.maxTokens ?? 2048,
-          },
-        });
-        break;
-      } catch (error) {
-        lastError = error;
-        if (isModelNotFoundGeminiError(error) && model !== this.defaultModel) {
-          model = this.defaultModel;
-          continue;
-        }
-        if (!isRetryableGeminiError(error) || attempt === MAX_RETRIES - 1) {
+    for (const model of candidateModels) {
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          response = await client.models.generateContent({
+            model,
+            contents,
+            config: {
+              systemInstruction: systemInstruction || undefined,
+              temperature: params.temperature ?? 0.25,
+              maxOutputTokens: params.maxTokens ?? 2048,
+            },
+          });
+          break;
+        } catch (error) {
+          lastError = error;
+          if (isModelNotFoundGeminiError(error)) {
+            break;
+          }
+          if (isRetryableGeminiError(error)) {
+            if (attempt < MAX_RETRIES - 1) {
+              await sleep(1000 * 2 ** attempt);
+              continue;
+            }
+            break;
+          }
           throw error;
         }
-        await sleep(1000 * 2 ** attempt);
       }
+      if (response) break;
     }
 
     if (!response) {
@@ -186,34 +198,51 @@ export class GeminiProvider implements LLMProvider {
     params: GenerationParams & { model?: string },
   ): AsyncIterable<string> {
     const client = this.ensureClient();
-    const requestedModel = params.model ?? this.defaultModel;
+    const primaryModel = params.model ?? this.defaultModel;
     const { systemInstruction, contents } = toGeminiRequest(params.messages);
 
-    let stream;
-    try {
-      stream = await client.models.generateContentStream({
-        model: requestedModel,
-        contents,
-        config: {
-          systemInstruction: systemInstruction || undefined,
-          temperature: params.temperature ?? 0.25,
-          maxOutputTokens: params.maxTokens ?? 2048,
-        },
-      });
-    } catch (error) {
-      if (isModelNotFoundGeminiError(error) && requestedModel !== this.defaultModel) {
-        stream = await client.models.generateContentStream({
-          model: this.defaultModel,
-          contents,
-          config: {
-            systemInstruction: systemInstruction || undefined,
-            temperature: params.temperature ?? 0.25,
-            maxOutputTokens: params.maxTokens ?? 2048,
-          },
-        });
-      } else {
-        throw error;
+    const candidateModels = [
+      primaryModel,
+      ...(primaryModel !== GEMINI_RESERVE_MODEL ? [GEMINI_RESERVE_MODEL] : []),
+      ...(primaryModel !== this.defaultModel && this.defaultModel !== GEMINI_RESERVE_MODEL ? [this.defaultModel] : []),
+    ];
+
+    let stream: any = null;
+    let lastError: unknown;
+
+    for (const model of candidateModels) {
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          stream = await client.models.generateContentStream({
+            model,
+            contents,
+            config: {
+              systemInstruction: systemInstruction || undefined,
+              temperature: params.temperature ?? 0.25,
+              maxOutputTokens: params.maxTokens ?? 2048,
+            },
+          });
+          break;
+        } catch (error) {
+          lastError = error;
+          if (isModelNotFoundGeminiError(error)) {
+            break;
+          }
+          if (isRetryableGeminiError(error)) {
+            if (attempt < MAX_RETRIES - 1) {
+              await sleep(1000 * 2 ** attempt);
+              continue;
+            }
+            break;
+          }
+          throw error;
+        }
       }
+      if (stream) break;
+    }
+
+    if (!stream) {
+      throw lastError ?? new Error("Gemini generateContentStream failed");
     }
 
     for await (const chunk of stream) {

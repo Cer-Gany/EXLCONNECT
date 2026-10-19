@@ -43,7 +43,7 @@ export function listProviders(): LLMProvider[] {
  * Falls back through available providers.
  */
 export const REPORT_MODEL = process.env.GEMINI_API_KEY
-  ? "gemini-3.1-flash-lite"
+  ? "gemini-2.5-flash"
   : process.env.OPENAI_API_KEY
     ? "gpt-4o"
     : process.env.KIMI_API_KEY
@@ -54,7 +54,7 @@ export const REPORT_MODEL = process.env.GEMINI_API_KEY
  * Model used for interview question generation and refinement.
  */
 export const GENERATOR_MODEL = process.env.GEMINI_API_KEY
-  ? "gemini-3.1-flash-lite"
+  ? "gemini-2.5-flash"
   : process.env.OPENAI_API_KEY
     ? "gpt-4o-mini"
     : process.env.KIMI_API_KEY

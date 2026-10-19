@@ -277,12 +277,24 @@ interface InterviewContext {
   language: string;
   followUpDepth: string;
   startQuestionIndex?: number;
+  /** Passed from browser; used for adaptive scoring API calls. */
+  sessionId?: string;
+  /** Whether adaptive mode is enabled for this interview. */
+  adaptiveMode?: boolean;
   questions: Array<{
     text: string;
     type: string;
     description?: string | null;
     options?: { options: string[]; allowMultiple?: boolean } | null;
     order: number;
+    /** DB question ID — required for adaptive scoring. */
+    id?: string;
+    /** Adaptive: difficulty 1–10. */
+    difficultyLevel?: number | null;
+    /** Adaptive: fine-grained skill tag. */
+    skillTag?: string | null;
+    /** Adaptive: broad competency group. */
+    competencyGroup?: string | null;
   }>;
 }
 
@@ -702,6 +714,31 @@ function buildTransitionSayHello(
     return bt(isZh, SPOKEN.transition.codingWb(qNum, bt(isZh, SPOKEN.codingWbIntro(nextQuestion.type))));
   }
   return bt(isZh, SPOKEN.transition.normal(qNum, nextQuestion.text, buildChoiceSuffix(nextQuestion.type, opts, isZh)));
+}
+
+/**
+ * Adaptive-mode transition: uses natural bridging language rather than
+ * announcing question numbers (which would be confusing when questions
+ * are not served in a fixed order).
+ */
+function buildAdaptiveTransitionSayHello(
+  nextQuestion: { text: string; type: string; options?: { options: string[]; allowMultiple?: boolean } | null },
+  isZh: boolean
+): string {
+  const isCodingOrWb = nextQuestion.type === "CODING" || nextQuestion.type === "WHITEBOARD";
+  const opts = nextQuestion.options as { options: string[]; allowMultiple?: boolean } | null | undefined;
+
+  if (isCodingOrWb) {
+    const intro = bt(isZh, SPOKEN.codingWbIntro(nextQuestion.type));
+    return isZh
+      ? `好的，我们继续。${intro}`
+      : `Great, let's continue. ${intro}`;
+  }
+
+  const optionsSuffix = buildChoiceSuffix(nextQuestion.type, opts, isZh);
+  return isZh
+    ? `好的，我们继续。${nextQuestion.text}${optionsSuffix}`
+    : `Great, let's continue. ${nextQuestion.text}${optionsSuffix}`;
 }
 
 function buildResumeGreeting(ctx: InterviewContext, questionIndex: number): string {
@@ -2292,16 +2329,87 @@ async function handleBrowserConnection(browserWs: WebSocket, ctx: InterviewConte
         pendingLastQuestionTimeout = null;
       }
 
-      currentQuestionIndex++;
+      // ── Adaptive scoring hook ─────────────────────────────────────
+      // When adaptive mode is active, score the current answer and get the
+      // next question from the engine. Falls back to sequential on any error.
+      let adaptiveOverrideIndex: number | null = null;
+      let adaptiveShouldEnd = false;
 
-      if (currentQuestionIndex < sortedQuestions.length) {
+      if (ctx.adaptiveMode && ctx.sessionId && currentQ.id) {
+        try {
+          // Extract candidate's answer from transcript (user turns only)
+          const candidateAnswer = transcriptSnapshot
+            .filter((e) => e.role === "user")
+            .map((e) => e.text.trim())
+            .filter(Boolean)
+            .join(" ");
+
+          // Determine the relay base URL from environment
+          const relayBase = process.env.NEXT_PUBLIC_APP_URL ||
+            process.env.NEXTAUTH_URL ||
+            "http://localhost:3000";
+
+          const scoreRes = await fetch(`${relayBase}/api/adaptive/score`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: ctx.sessionId,
+              questionId: currentQ.id,
+              questionText: currentQ.text,
+              questionType: currentQ.type,
+              difficultyLevel: currentQ.difficultyLevel ?? 5,
+              skillTag: currentQ.skillTag ?? "general",
+              competencyGroup: currentQ.competencyGroup ?? "general",
+              transcript: candidateAnswer,
+              thetaBefore: null, // engine will look it up from state
+            }),
+            signal: AbortSignal.timeout(4000), // 4s max — transition is ~2-4s naturally
+          });
+
+          if (scoreRes.ok) {
+            const scoreData = await scoreRes.json() as {
+              nextSortedIndex?: number | null;
+              shouldEnd?: boolean;
+            };
+            adaptiveShouldEnd = !!scoreData.shouldEnd;
+            if (
+              !adaptiveShouldEnd &&
+              typeof scoreData.nextSortedIndex === "number" &&
+              scoreData.nextSortedIndex >= 0 &&
+              scoreData.nextSortedIndex < sortedQuestions.length
+            ) {
+              adaptiveOverrideIndex = scoreData.nextSortedIndex;
+              log.info(`Adaptive: next question index → ${adaptiveOverrideIndex} (scored Q[${currentQ.id}])`);
+            }
+          } else {
+            log.warn(`Adaptive scoring API returned ${scoreRes.status} — falling back to sequential`);
+          }
+        } catch (adaptiveErr) {
+          log.warn("Adaptive scoring failed, falling back to sequential:", adaptiveErr);
+        }
+      }
+
+      // Apply adaptive override or fall back to sequential ++
+      if (adaptiveOverrideIndex !== null) {
+        currentQuestionIndex = adaptiveOverrideIndex;
+      } else {
+        currentQuestionIndex++;
+      }
+
+      // If adaptive engine says the interview should end, treat as past-end
+      const effectivePastEnd = adaptiveShouldEnd || currentQuestionIndex >= sortedQuestions.length;
+
+      if (!effectivePastEnd) {
         const summary = transcriptSnapshot.length > 0
           ? await summarizeQuestion(currentQ.text, transcriptSnapshot, isZh)
           : "";
         questionSummaries.push(summary);
 
         const nextQ = sortedQuestions[currentQuestionIndex];
-        const transition = buildTransitionSayHello(currentQuestionIndex, nextQ, isZh);
+        // In adaptive mode, use natural transition (don't announce question numbers)
+        const transition = ctx.adaptiveMode
+          ? buildAdaptiveTransitionSayHello(nextQ, isZh)
+          : buildTransitionSayHello(currentQuestionIndex, nextQ, isZh);
 
         browserWs.send(
           JSON.stringify({
@@ -2309,6 +2417,7 @@ async function handleBrowserConnection(browserWs: WebSocket, ctx: InterviewConte
             questionIndex: currentQuestionIndex,
             totalQuestions: sortedQuestions.length,
             auto,
+            adaptive: ctx.adaptiveMode ?? false,
           })
         );
 

@@ -2,6 +2,14 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -15,8 +23,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { AI_TONES, FOLLOW_UP_DEPTHS, LANGUAGES } from "@/lib/constants";
+import { validateAdaptivePool } from "@/lib/adaptive/pool-validation";
 import { trpc } from "@/lib/trpc/client";
 import {
+    Brain,
     Copy,
     Globe,
     LinkIcon as LinkPlusIcon,
@@ -30,6 +40,31 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useEditInterview } from "../edit-context";
+
+interface AdaptiveQuestionMetadata {
+  difficultyLevel?: number | null;
+  skillTag?: string | null;
+  competencyGroup?: string | null;
+}
+
+interface AdaptiveInterviewSettings {
+  adaptiveMode?: boolean;
+  adaptiveConfig?: {
+    startingDifficulty?: number;
+    masteryThreshold?: number;
+    minQuestionsPerCompetency?: number;
+    maxQuestionsPerCompetency?: number;
+  } | null;
+  questions?: AdaptiveQuestionMetadata[];
+}
+
+interface AdaptiveSuggestion {
+  id: string;
+  text: string;
+  difficultyLevel: number;
+  skillTag: string;
+  competencyGroup: string;
+}
 
 function normalizeInterviewLanguage(language?: string | null): string {
   const normalized = language?.trim().toLowerCase();
@@ -80,6 +115,48 @@ export default function SettingsTab() {
   );
   const [antiCheatingEnabled, setAntiCheatingEnabled] = useState<boolean>(
     interview.antiCheatingEnabled ?? false,
+  );
+  const [adaptiveMode, setAdaptiveMode] = useState<boolean>(
+    (interview as unknown as AdaptiveInterviewSettings).adaptiveMode ?? false,
+  );
+  const [startingDifficulty, setStartingDifficulty] = useState<number>(
+    (interview as unknown as AdaptiveInterviewSettings).adaptiveConfig?.startingDifficulty ?? 5,
+  );
+  const [masteryThreshold, setMasteryThreshold] = useState<number>(
+    (interview as unknown as AdaptiveInterviewSettings).adaptiveConfig?.masteryThreshold ?? 7.5,
+  );
+  const [minQuestionsPerCompetency, setMinQuestionsPerCompetency] = useState<number>(
+    (interview as unknown as AdaptiveInterviewSettings).adaptiveConfig?.minQuestionsPerCompetency ?? 2,
+  );
+  const [maxQuestionsPerCompetency, setMaxQuestionsPerCompetency] = useState<number>(
+    (interview as unknown as AdaptiveInterviewSettings).adaptiveConfig?.maxQuestionsPerCompetency ?? 6,
+  );
+  const [adaptiveSuggestions, setAdaptiveSuggestions] = useState<AdaptiveSuggestion[] | null>(null);
+  const prepareAdaptivePoolMutation = trpc.question.prepareAdaptivePool.useMutation({
+    onSuccess: (data) => {
+      setAdaptiveSuggestions(data.suggestions);
+    },
+    onError: (error) => {
+      toast({ title: "Could not prepare adaptive pool", description: error.message, variant: "destructive" });
+    },
+  });
+  const applyAdaptivePoolMutation = trpc.question.applyAdaptivePool.useMutation({
+    onSuccess: async () => {
+      await utils.interview.getById.invalidate({ id: interviewId });
+      setAdaptiveSuggestions(null);
+      toast({ title: "Adaptive metadata applied", description: "Your existing questions are ready for adaptive routing." });
+    },
+    onError: (error) => {
+      toast({ title: "Could not apply adaptive metadata", description: error.message, variant: "destructive" });
+    },
+  });
+  const adaptiveInterview = interview as unknown as AdaptiveInterviewSettings;
+  const adaptivePoolValidation = validateAdaptivePool(
+    (adaptiveInterview.questions ?? []).map((question) => ({
+      difficultyLevel: question.difficultyLevel ?? 5,
+      skillTag: question.skillTag ?? "",
+      competencyGroup: question.competencyGroup ?? "",
+    })),
   );
 
   const requireInvite = interview.requireInvite ?? true;
@@ -400,6 +477,189 @@ export default function SettingsTab() {
         </CardContent>
       </Card>
 
+      <Card className="md:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5 text-primary" />
+            Adaptive Testing Engine (GRE / GMAT Style)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-semibold">Enable Adaptive Mode</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Dynamically adjust question difficulty and sequence in real-time based on candidate performance.
+                </p>
+              </div>
+              <Switch
+                checked={adaptiveMode}
+                onCheckedChange={setAdaptiveMode}
+              />
+            </div>
+
+            {adaptiveMode && (
+              <div className="mt-4 space-y-4 border-t pt-4">
+                <div className={`rounded-md border p-3 text-xs ${
+                  adaptivePoolValidation.valid
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : "border-destructive/40 bg-destructive/5"
+                }`}>
+                  <p className="font-medium">
+                    Adaptive pool: {adaptivePoolValidation.questionCount} questions across{" "}
+                    {adaptivePoolValidation.competencies.length} competencies
+                  </p>
+                  {adaptivePoolValidation.issues.length > 0 && (
+                    <ul className="mt-1 list-inside list-disc text-destructive">
+                      {adaptivePoolValidation.issues.map((issue) => <li key={issue}>{issue}</li>)}
+                    </ul>
+                  )}
+                  {adaptivePoolValidation.warnings.length > 0 && (
+                    <ul className="mt-1 list-inside list-disc text-amber-700 dark:text-amber-300">
+                      {adaptivePoolValidation.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  )}
+                  {adaptivePoolValidation.valid && adaptivePoolValidation.warnings.length === 0 && (
+                    <p className="mt-1 text-emerald-700 dark:text-emerald-300">
+                      Coverage is ready for adaptive routing.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+                  <div>
+                    <p className="font-medium">Prepare an existing assessment</p>
+                    <p className="text-muted-foreground">
+                      Gemini will suggest difficulty, skills, and competency groups for review before saving.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={prepareAdaptivePoolMutation.isLoading}
+                    onClick={() => prepareAdaptivePoolMutation.mutate({ interviewId })}
+                  >
+                    {prepareAdaptivePoolMutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Prepare with Gemini
+                  </Button>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-xs">Starting Difficulty (1–10)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={startingDifficulty}
+                      onChange={(e) => setStartingDifficulty(Number(e.target.value) || 5)}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Initial difficulty tier served to the candidate (default: 5 — Medium).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs">Mastery Threshold θ (1–10)</Label>
+                    <Input
+                      type="number"
+                      step={0.5}
+                      min={5}
+                      max={9.5}
+                      value={masteryThreshold}
+                      onChange={(e) => setMasteryThreshold(Number(e.target.value) || 7.5)}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Ability score (θ) at which a competency is marked mastered (default: 7.5).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs">Min Questions per Competency</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={minQuestionsPerCompetency}
+                      onChange={(e) => setMinQuestionsPerCompetency(Number(e.target.value) || 2)}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Minimum questions to evaluate before routing to next competency (default: 2).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs">Max Questions per Competency</Label>
+                    <Input
+                      type="number"
+                      min={3}
+                      max={10}
+                      value={maxQuestionsPerCompetency}
+                      onChange={(e) => setMaxQuestionsPerCompetency(Number(e.target.value) || 6)}
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Safety cap on questions in any single competency group (default: 6).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-md bg-primary/10 p-3 text-xs text-foreground/90 space-y-1">
+                  <p className="font-medium text-primary">How Adaptive Testing Works in EXLConnect:</p>
+                  <ul className="list-inside list-disc text-muted-foreground space-y-0.5">
+                    <li>Responses are scored (1–10) in the background during natural transition pauses.</li>
+                    <li>Ability estimate (θ) updates via Exponential Moving Average (EMA).</li>
+                    <li>High scores branch to harder questions; foundational struggles pivot to alternate skills.</li>
+                    <li>Recruiters receive a calibrated ability score, percentile benchmark, and competency heatmap.</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={adaptiveSuggestions !== null} onOpenChange={(open) => !open && setAdaptiveSuggestions(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Review adaptive metadata</DialogTitle>
+            <DialogDescription>
+              Confirm these suggestions before they are written to the assessment questions.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55vh] space-y-2 overflow-y-auto">
+            {adaptiveSuggestions?.map((suggestion, index) => (
+              <div key={suggestion.id} className="rounded-md border p-3 text-sm">
+                <p className="font-medium">Q{index + 1}: {suggestion.text}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Difficulty {suggestion.difficultyLevel}/10 · {suggestion.skillTag} · {suggestion.competencyGroup}
+                </p>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAdaptiveSuggestions(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={applyAdaptivePoolMutation.isLoading || !adaptiveSuggestions}
+              onClick={() => adaptiveSuggestions && applyAdaptivePoolMutation.mutate({
+                interviewId,
+                suggestions: adaptiveSuggestions.map(({ id, difficultyLevel, skillTag, competencyGroup }) => ({
+                  id,
+                  difficultyLevel,
+                  skillTag,
+                  competencyGroup,
+                })),
+              })}
+            >
+              {applyAdaptivePoolMutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Apply metadata
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-end">
         <Button
           onClick={() =>
@@ -419,9 +679,18 @@ export default function SettingsTab() {
                 ? Number(timeLimitMinutes)
                 : null,
               antiCheatingEnabled,
+              adaptiveMode,
+              adaptiveConfig: {
+                startingDifficulty,
+                masteryThreshold,
+                minQuestionsPerCompetency,
+                maxQuestionsPerCompetency,
+                learningRate: 0.3,
+                floorThreshold: 2.5,
+              },
             })
           }
-          disabled={updateMutation.isLoading}
+          disabled={updateMutation.isLoading || (adaptiveMode && !adaptivePoolValidation.valid)}
         >
           {updateMutation.isLoading && (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

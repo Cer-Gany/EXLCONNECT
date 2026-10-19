@@ -124,6 +124,9 @@ export interface QuestionCardData {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   options?: { options: string[]; allowMultiple?: boolean } | any;
   starterCode?: { language: string; code: string } | null;
+  difficultyLevel?: number | null;
+  skillTag?: string | null;
+  competencyGroup?: string | null;
 }
 
 interface QuestionCardProps {
@@ -396,6 +399,56 @@ export function QuestionCard({
                 </div>
               )}
 
+              {/* Adaptive Testing Calibration */}
+              <div className="rounded-lg border border-border/70 bg-muted/30 p-2.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    Adaptive Calibration
+                  </span>
+                  <Badge variant="outline" className="text-[10px]">
+                    {(local.difficultyLevel ?? 5) <= 3
+                      ? "Easy Tier (1–3)"
+                      : (local.difficultyLevel ?? 5) <= 7
+                      ? "Medium Tier (4–7)"
+                      : "Hard Tier (8–10)"}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-2.5 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Difficulty (1–10)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={local.difficultyLevel ?? 5}
+                      onChange={(e) => update({ difficultyLevel: Number(e.target.value) || 5 })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Skill Tag</Label>
+                    <Input
+                      placeholder="e.g. system_design"
+                      value={local.skillTag ?? ""}
+                      onChange={(e) => update({ skillTag: e.target.value || null })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Competency Group</Label>
+                    <Input
+                      placeholder="e.g. technical"
+                      value={local.competencyGroup ?? ""}
+                      onChange={(e) => update({ competencyGroup: e.target.value || null })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Required toggle */}
               <div className="flex items-center gap-2">
                 <Switch
@@ -550,6 +603,31 @@ export function QuestionCard({
               ) : (
                 <Badge variant="outline" className="text-xs text-muted-foreground">
                   Optional
+                </Badge>
+              )}
+              {typeof data.difficultyLevel === "number" && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-xs font-mono",
+                    data.difficultyLevel <= 3
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                      : data.difficultyLevel <= 7
+                      ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                      : "border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300"
+                  )}
+                >
+                  Lv {data.difficultyLevel}
+                </Badge>
+              )}
+              {data.competencyGroup && (
+                <Badge variant="secondary" className="text-xs capitalize">
+                  {data.competencyGroup}
+                </Badge>
+              )}
+              {data.skillTag && (
+                <Badge variant="outline" className="text-xs text-muted-foreground">
+                  #{data.skillTag}
                 </Badge>
               )}
             </div>

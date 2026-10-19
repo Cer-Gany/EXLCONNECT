@@ -949,6 +949,22 @@ export const sessionRouter = router({
         isLive,
       };
     }),
+
+  getAdaptiveResponses: publicProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const { data, error } = await ctx.supabase
+        .from("adaptive_question_responses")
+        .select("*, question:questions(*)")
+        .eq("sessionId", input.sessionId)
+        .order("questionOrder", { ascending: true });
+
+      if (error) {
+        log.error("Failed to load adaptive responses", error);
+        return [];
+      }
+      return data ?? [];
+    }),
 });
 
 export interface LiveSessionMessage {

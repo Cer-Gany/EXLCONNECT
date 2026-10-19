@@ -134,6 +134,10 @@ export type Database = {
           parsedResume: Json | null;
           companyName: string | null;
           roleTitle: string | null;
+          /** Whether adaptive testing mode is enabled for this interview. */
+          adaptiveMode: boolean;
+          /** AdaptiveConfig JSON: startingDifficulty, learningRate, thresholds, quotas. */
+          adaptiveConfig: Json | null;
           createdAt: string;
           updatedAt: string;
         };
@@ -169,6 +173,8 @@ export type Database = {
           parsedResume?: Json | null;
           companyName?: string | null;
           roleTitle?: string | null;
+          adaptiveMode?: boolean;
+          adaptiveConfig?: Json | null;
           createdAt?: string;
           updatedAt?: string;
         };
@@ -204,6 +210,8 @@ export type Database = {
           parsedResume?: Json | null;
           companyName?: string | null;
           roleTitle?: string | null;
+          adaptiveMode?: boolean;
+          adaptiveConfig?: Json | null;
           createdAt?: string;
           updatedAt?: string;
         };
@@ -225,6 +233,12 @@ export type Database = {
           probeThreshold: number | null;
           showIf: Json | null;
           skipIf: Json | null;
+          /** Adaptive testing: difficulty 1–10. Default 5. */
+          difficultyLevel: number | null;
+          /** Adaptive testing: fine-grained skill, e.g. "system_design". */
+          skillTag: string | null;
+          /** Adaptive testing: broad competency group, e.g. "technical". */
+          competencyGroup: string | null;
           timeLimitSeconds: number | null;
           isRequired: boolean;
           allowFileUpload: boolean;
@@ -247,6 +261,9 @@ export type Database = {
           probeThreshold?: number | null;
           showIf?: Json | null;
           skipIf?: Json | null;
+          difficultyLevel?: number | null;
+          skillTag?: string | null;
+          competencyGroup?: string | null;
           timeLimitSeconds?: number | null;
           isRequired?: boolean;
           allowFileUpload?: boolean;
@@ -273,6 +290,9 @@ export type Database = {
           isRequired?: boolean;
           allowFileUpload?: boolean;
           allowedFileTypes?: string[];
+          difficultyLevel?: number | null;
+          skillTag?: string | null;
+          competencyGroup?: string | null;
           createdAt?: string;
           updatedAt?: string;
         };
@@ -302,6 +322,10 @@ export type Database = {
           screenRecordingUrl: string | null;
           audioDuration: number | null;
           screenshots: Json | null;
+          /** Live adaptive state: θ estimates, question history, mastery flags. */
+          adaptiveState: Json | null;
+          /** Post-session adaptive report: heatmap, path, percentile. */
+          adaptiveReport: Json | null;
           createdAt: string;
           updatedAt: string;
         };
@@ -328,6 +352,8 @@ export type Database = {
           screenRecordingUrl?: string | null;
           audioDuration?: number | null;
           screenshots?: Json | null;
+          adaptiveState?: Json | null;
+          adaptiveReport?: Json | null;
           createdAt?: string;
           updatedAt?: string;
         };
@@ -354,6 +380,8 @@ export type Database = {
           screenRecordingUrl?: string | null;
           audioDuration?: number | null;
           screenshots?: Json | null;
+          adaptiveState?: Json | null;
+          adaptiveReport?: Json | null;
           createdAt?: string;
           updatedAt?: string;
         };
@@ -419,6 +447,51 @@ export type Database = {
           wordCount?: number | null;
           readingTimeSeconds?: number | null;
           timestamp?: string;
+        };
+        Relationships: [];
+      };
+      adaptive_question_responses: {
+        Row: {
+          id: string;
+          sessionId: string;
+          questionId: string;
+          questionOrder: number | null;
+          difficultyServed: number | null;
+          aiScore: number | null;
+          scoreReasoning: string | null;
+          thetaBefore: number | null;
+          thetaAfter: number | null;
+          skillTag: string | null;
+          competencyGroup: string | null;
+          servedAt: string;
+        };
+        Insert: {
+          id?: string;
+          sessionId: string;
+          questionId: string;
+          questionOrder?: number | null;
+          difficultyServed?: number | null;
+          aiScore?: number | null;
+          scoreReasoning?: string | null;
+          thetaBefore?: number | null;
+          thetaAfter?: number | null;
+          skillTag?: string | null;
+          competencyGroup?: string | null;
+          servedAt?: string;
+        };
+        Update: {
+          id?: string;
+          sessionId?: string;
+          questionId?: string;
+          questionOrder?: number | null;
+          difficultyServed?: number | null;
+          aiScore?: number | null;
+          scoreReasoning?: string | null;
+          thetaBefore?: number | null;
+          thetaAfter?: number | null;
+          skillTag?: string | null;
+          competencyGroup?: string | null;
+          servedAt?: string;
         };
         Relationships: [];
       };

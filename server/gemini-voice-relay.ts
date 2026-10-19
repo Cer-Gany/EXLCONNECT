@@ -211,6 +211,10 @@ interface InterviewContext {
   language: string;
   followUpDepth: string;
   startQuestionIndex?: number;
+  /** Passed from browser; used for adaptive scoring API calls. */
+  sessionId?: string;
+  /** Whether adaptive testing mode is active. */
+  adaptiveMode?: boolean;
   questions: Array<{
     text: string;
     type: string;
@@ -218,6 +222,10 @@ interface InterviewContext {
     options?: { options: string[]; allowMultiple?: boolean } | null;
     starterCode?: { language: string; code: string } | null;
     order: number;
+    id?: string;
+    difficultyLevel?: number | null;
+    skillTag?: string | null;
+    competencyGroup?: string | null;
   }>;
 }
 
@@ -682,6 +690,23 @@ async function handleMicTest(browserWs: WebSocket) {
 
 async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
   const sortedQuestions = ctx.questions.sort((a, b) => a.order - b.order);
+  const adaptiveMetadataReady =
+    !ctx.adaptiveMode ||
+    sortedQuestions.length >= 4 &&
+    sortedQuestions.every(
+      (question) =>
+        Number.isFinite(question.difficultyLevel) &&
+        (question.difficultyLevel ?? 0) >= 1 &&
+        (question.difficultyLevel ?? 0) <= 10 &&
+        Boolean(question.skillTag?.trim()) &&
+        Boolean(question.competencyGroup?.trim()),
+    ) &&
+    new Set(sortedQuestions.map((question) => question.competencyGroup?.trim().toLowerCase())).size > 1;
+  if (ctx.adaptiveMode && !adaptiveMetadataReady) {
+    log.warn(
+      "Adaptive mode requested, but this assessment has insufficient question metadata; routing will be sequential",
+    );
+  }
   const isZh = isChineseInterview(ctx);
   let currentQuestionIndex = ctx.startQuestionIndex ?? 0;
   let questionEnteredAt = Date.now();
@@ -747,6 +772,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
   let pendingTransitionTimer: ReturnType<typeof setTimeout> | null = null;
 
   const conversationHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
+  const questionTranscript: Array<{ role: "user" | "assistant"; text: string }> = [];
   const MAX_HISTORY_ENTRIES = 30;
 
   log.info(`Interview: "${ctx.title}" (${sortedQuestions.length} questions, lang=${ctx.language}, startQ=${currentQuestionIndex}, followUpDepth=${ctx.followUpDepth})`);
@@ -772,6 +798,10 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     while (conversationHistory.length > MAX_HISTORY_ENTRIES) {
       conversationHistory.shift();
     }
+  }
+
+  function pushQuestionTranscript(role: "user" | "assistant", text: string) {
+    if (text.trim()) questionTranscript.push({ role, text: text.trim() });
   }
 
   function gemOk(): boolean {
@@ -960,6 +990,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
 
     speechTranscriptCommitted = true;
     pushHistory("user", committedText);
+    pushQuestionTranscript("user", committedText);
     send({ type: "asr_ended", text: committedText });
     log.info(`Committed user transcript (${reason}): ${JSON.stringify(committedText)}`);
     inputTranscriptBuffer = "";
@@ -1281,7 +1312,77 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
 
   // ── Question change tool logic ──────────────────────────────────
 
-  function processQuestionChange(args: { questionIndex?: unknown; userRequested?: unknown }): string {
+  async function resolveAdaptiveTransition(
+    fallbackIndex: number,
+  ): Promise<{ targetIndex: number; shouldEnd: boolean }> {
+    if (!ctx.adaptiveMode || !ctx.sessionId || !adaptiveMetadataReady) {
+      return { targetIndex: fallbackIndex, shouldEnd: false };
+    }
+
+    const currentQ = sortedQuestions[currentQuestionIndex];
+    if (!currentQ?.id || !currentQ.competencyGroup) {
+      log.warn("Adaptive transition skipped: current question is missing adaptive metadata");
+      return { targetIndex: fallbackIndex, shouldEnd: false };
+    }
+
+    const relayBase =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXTAUTH_URL ||
+      "http://localhost:3000";
+    const candidateAnswer = questionTranscript
+      .filter((entry) => entry.role === "user")
+      .map((entry) => entry.text)
+      .join(" ");
+
+    try {
+      const response = await fetch(`${relayBase}/api/adaptive/score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: ctx.sessionId,
+          questionId: currentQ.id,
+          questionText: currentQ.text,
+          questionType: currentQ.type,
+          difficultyLevel: currentQ.difficultyLevel ?? 5,
+          skillTag: currentQ.skillTag ?? "general",
+          competencyGroup: currentQ.competencyGroup,
+          transcript: candidateAnswer,
+        }),
+        signal: AbortSignal.timeout(4_000),
+      });
+
+      if (!response.ok) {
+        log.warn(`Adaptive scoring API returned ${response.status} — falling back to sequential`);
+        return { targetIndex: fallbackIndex, shouldEnd: false };
+      }
+
+      const data = await response.json() as {
+        nextSortedIndex?: number | null;
+        shouldEnd?: boolean;
+      };
+      const shouldEnd = data.shouldEnd === true;
+      const nextIndex = data.nextSortedIndex;
+      if (
+        !shouldEnd &&
+        typeof nextIndex === "number" &&
+        nextIndex >= 0 &&
+        nextIndex < sortedQuestions.length
+      ) {
+        log.info(`Adaptive: next question index → ${nextIndex} (scored Q[${currentQ.id}])`);
+        return { targetIndex: nextIndex, shouldEnd: false };
+      }
+
+      return { targetIndex: fallbackIndex, shouldEnd };
+    } catch (err) {
+      log.warn("Adaptive scoring failed, falling back to sequential:", err);
+      return { targetIndex: fallbackIndex, shouldEnd: false };
+    }
+  }
+
+  async function processQuestionChange(args: { questionIndex?: unknown; userRequested?: unknown }): Promise<string> {
+    if (interviewDone) {
+      return "The interview is already ending. Do not request another question change.";
+    }
     const rawIdx = typeof args.questionIndex === "number" ? args.questionIndex : Number(args.questionIndex);
     const newIdx = Number.isFinite(rawIdx) ? Math.trunc(rawIdx) : currentQuestionIndex + 1;
     const userRequested = args.userRequested === true;
@@ -1324,16 +1425,37 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
 
     clearPendingTransition();
 
+    let resolvedRequestedIndex = newIdx;
+    let adaptiveAlreadyResolved = false;
     if (newIdx >= sortedQuestions.length) {
-      beginInterviewEnd("tool call");
-      return "Interview is now complete. Please give a brief farewell.";
+      if (ctx.adaptiveMode && userRequested) {
+        const adaptiveTransition = await resolveAdaptiveTransition(newIdx);
+        adaptiveAlreadyResolved = true;
+        if (!adaptiveTransition.shouldEnd && adaptiveTransition.targetIndex < sortedQuestions.length) {
+          resolvedRequestedIndex = adaptiveTransition.targetIndex;
+        } else {
+          beginInterviewEnd("adaptive completion");
+          return "Interview is now complete. Please give a brief farewell.";
+        }
+      } else {
+        beginInterviewEnd("tool call");
+        return "Interview is now complete. Please give a brief farewell.";
+      }
     }
 
-    if (newIdx >= 0 && newIdx !== currentQuestionIndex) {
-      const dir = newIdx > currentQuestionIndex ? "next" : "previous";
+    if (resolvedRequestedIndex >= 0 && resolvedRequestedIndex !== currentQuestionIndex) {
+      const dir = resolvedRequestedIndex > currentQuestionIndex ? "next" : "previous";
       const arrow = dir === "next" ? "→" : "←";
+      const adaptiveTransition = dir === "next" && !adaptiveAlreadyResolved
+        ? await resolveAdaptiveTransition(resolvedRequestedIndex)
+        : { targetIndex: resolvedRequestedIndex, shouldEnd: false };
+      if (adaptiveTransition.shouldEnd) {
+        beginInterviewEnd("adaptive completion");
+        return "Interview is now complete. Please give a brief farewell.";
+      }
+      const resolvedIndex = adaptiveTransition.targetIndex;
       send({ type: "transitioning", auto: true, direction: dir });
-      currentQuestionIndex = newIdx;
+      currentQuestionIndex = resolvedIndex;
       questionEnteredAt = Date.now();
       userCommittedWordsThisQuestion = 0;
       assistantTurnsThisQuestion = 0;
@@ -1345,25 +1467,26 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
         auto: true,
       });
       pushHistory("user", `[Moved to question ${currentQuestionIndex + 1}: "${sortedQuestions[currentQuestionIndex]?.text}"]`);
+      questionTranscript.length = 0;
       log.info(`${arrow} Q${currentQuestionIndex + 1}/${sortedQuestions.length}`);
     }
 
-    return `Moved to question ${newIdx + 1}: "${sortedQuestions[newIdx]?.text}". Please naturally transition and ask this question.`;
+    return `Moved to question ${currentQuestionIndex + 1}: "${sortedQuestions[currentQuestionIndex]?.text}". Please naturally transition and ask this question.`;
   }
 
-  function handleToolCalls(calls: Array<{ id?: string; name?: string; args?: Record<string, unknown> }>) {
+  async function handleToolCalls(calls: Array<{ id?: string; name?: string; args?: Record<string, unknown> }>) {
     // Make sure the user's utterance is committed (word counts, history)
     // BEFORE the transition guards look at it.
     beginModelResponse();
     toolCallSinceLastTurn = true;
 
-    const functionResponses = calls.map((fc) => {
+    const functionResponses = await Promise.all(calls.map(async (fc) => {
       if (fc.name !== "signal_question_change") {
         return { id: fc.id, name: fc.name, response: { error: `Unknown function: ${fc.name}` } };
       }
-      const output = processQuestionChange(fc.args ?? {});
+      const output = await processQuestionChange(fc.args ?? {});
       return { id: fc.id, name: fc.name, response: { output } };
-    });
+    }));
 
     try {
       geminiSession?.sendToolResponse({ functionResponses });
@@ -1452,6 +1575,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
       if (capturedModelText) {
         log.info(`TTS done (${ttsBytes}B sent): ${JSON.stringify(capturedModelText)}`);
         pushHistory("assistant", capturedModelText);
+        pushQuestionTranscript("assistant", capturedModelText);
         noteAssistantTurnAgainstFollowUpBudget();
       }
       send({ type: "tts_ended" });
@@ -1517,7 +1641,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     }
 
     if (msg.toolCall?.functionCalls?.length) {
-      handleToolCalls(msg.toolCall.functionCalls);
+      void handleToolCalls(msg.toolCall.functionCalls);
     }
 
     if (sc?.turnComplete) handleTurnComplete();
@@ -1697,6 +1821,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     directionLabel: string,
     reason: "button" | "user_request" = "button",
   ) {
+    if (interviewDone) return;
     clearPendingTransition();
     clearQuestionPrompt();
     cancelOngoingResponse();
@@ -1705,25 +1830,36 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     const direction = targetIdx > currentQuestionIndex ? "next" : "previous";
     send({ type: "transitioning", direction });
 
-    setTimeout(() => {
+    setTimeout(async () => {
       if (targetIdx === currentQuestionIndex) {
         isTransitioning = false;
         return;
       }
-      if (targetIdx >= sortedQuestions.length) {
+      const dir = targetIdx > currentQuestionIndex ? "→" : "←";
+      const adaptiveTransition = direction === "next"
+        ? await resolveAdaptiveTransition(targetIdx)
+        : { targetIndex: targetIdx, shouldEnd: false };
+      if (
+        adaptiveTransition.shouldEnd ||
+        adaptiveTransition.targetIndex >= sortedQuestions.length
+      ) {
         isTransitioning = false;
-        beginInterviewEnd("button");
+        beginInterviewEnd(ctx.adaptiveMode ? "adaptive completion" : "button");
         scheduleDropReset();
-        gSend("[SYSTEM] The participant chose to end the interview. Give a brief wrap-up and farewell now.");
+        gSend(
+          ctx.adaptiveMode
+            ? "[SYSTEM] The adaptive interview is complete. Give a brief wrap-up and farewell now."
+            : "[SYSTEM] The participant chose to end the interview. Give a brief wrap-up and farewell now.",
+        );
         return;
       }
-      const dir = targetIdx > currentQuestionIndex ? "→" : "←";
-      currentQuestionIndex = targetIdx;
+      currentQuestionIndex = adaptiveTransition.targetIndex;
       questionEnteredAt = Date.now();
       userCommittedWordsThisQuestion = 0;
       assistantTurnsThisQuestion = 0;
       followUpLimitNoticeSent = false;
       pushHistory("user", `[Moved to question ${currentQuestionIndex + 1}: "${sortedQuestions[currentQuestionIndex]?.text}"]`);
+      questionTranscript.length = 0;
       send({
         type: "question_change",
         questionIndex: currentQuestionIndex,
@@ -1768,12 +1904,14 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
       const msg = JSON.parse(data.toString());
 
       if (msg.type === "next_question") {
+        if (interviewDone) return;
         log.info("Browser requested next question");
         const nextIdx = Math.min(currentQuestionIndex + 1, sortedQuestions.length);
         if (nextIdx !== currentQuestionIndex) requestTransition(nextIdx, "Next Question");
         return;
       }
       if (msg.type === "prev_question") {
+        if (interviewDone) return;
         log.info("Browser requested previous question");
         const prevIdx = Math.max(currentQuestionIndex - 1, 0);
         if (prevIdx !== currentQuestionIndex) requestTransition(prevIdx, "Previous Question");

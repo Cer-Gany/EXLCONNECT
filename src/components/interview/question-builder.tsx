@@ -55,6 +55,9 @@ interface Question {
   options?: any;
   starterCode?: { language: string; code: string } | null;
   order: number;
+  difficultyLevel?: number | null;
+  skillTag?: string | null;
+  competencyGroup?: string | null;
 }
 
 interface AssessmentCriterion {
@@ -202,6 +205,9 @@ export function QuestionBuilder({
     type: "OPEN_ENDED",
     description: "",
     isRequired: true,
+    difficultyLevel: 5,
+    skillTag: null,
+    competencyGroup: null,
   };
 
   const displayQuestions = optimisticOrder ?? questions;
@@ -212,13 +218,15 @@ export function QuestionBuilder({
       {/* Questions section */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <ListOrdered className="h-4 w-4" />
-            Questions ({questions.length})
-            {reordering && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            )}
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ListOrdered className="h-4 w-4" />
+              Questions ({questions.length})
+              {reordering && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+              )}
+            </CardTitle>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           {displayQuestions.length === 0 && !addingNew && (
@@ -251,6 +259,9 @@ export function QuestionBuilder({
                       isRequired: updated.isRequired,
                       options: updated.options,
                       starterCode: updated.starterCode as { language: string; code: string } | null | undefined,
+                      difficultyLevel: updated.difficultyLevel ?? 5,
+                      skillTag: updated.skillTag ?? null,
+                      competencyGroup: updated.competencyGroup ?? null,
                     });
                   }}
                   onCancel={() => setEditingId(null)}
@@ -292,6 +303,9 @@ export function QuestionBuilder({
                   isRequired: data.isRequired,
                   options: data.options,
                   starterCode: data.starterCode as { language: string; code: string } | null | undefined,
+                  difficultyLevel: data.difficultyLevel ?? 5,
+                  skillTag: data.skillTag ?? null,
+                  competencyGroup: data.competencyGroup ?? null,
                 });
               }}
               onCancel={() => setAddingNew(false)}

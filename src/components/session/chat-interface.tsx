@@ -949,7 +949,12 @@ export function ChatInterface({
 
       if (!options?.ignoreQuestionAdvance && data.questionAdvanced) {
         setCurrentQuestion((prev) =>
-          Math.min(prev + 1, interview.questions.length)
+          Math.min(
+            typeof data.nextQuestionIndex === "number"
+              ? data.nextQuestionIndex
+              : prev + 1,
+            interview.questions.length,
+          ),
         );
       }
 

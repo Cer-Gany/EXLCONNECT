@@ -6,6 +6,9 @@ export interface TemplateQuestion {
   order: number;
   probeOnShort?: boolean;
   isRequired?: boolean;
+  difficultyLevel?: number;
+  skillTag?: string;
+  competencyGroup?: string;
 }
 
 export interface InterviewTemplate {
@@ -21,6 +24,7 @@ export interface InterviewTemplate {
   voiceEnabled: boolean;
   videoEnabled: boolean;
   timeLimitMinutes?: number;
+  adaptiveMode?: boolean;
   questions: TemplateQuestion[];
 }
 
@@ -33,6 +37,7 @@ export const INTERVIEW_TEMPLATES: InterviewTemplate[] = [
     icon: "Code2",
     aiTone: "PROFESSIONAL",
     followUpDepth: "DEEP",
+    adaptiveMode: true,
     assessmentCriteria: [
       { name: "Problem Solving", description: "Ability to break down complex problems, identify edge cases, and arrive at efficient solutions." },
       { name: "Code Quality", description: "Clean, readable code with appropriate use of data structures, algorithms, and design patterns." },
@@ -44,11 +49,11 @@ export const INTERVIEW_TEMPLATES: InterviewTemplate[] = [
     videoEnabled: true,
     timeLimitMinutes: 30,
     questions: [
-      { order: 0, text: "Walk me through a recent project where you solved a challenging technical problem. What was the problem, your approach, and the outcome?", type: "OPEN_ENDED", probeOnShort: true, isRequired: true },
-      { order: 1, text: "Given an array of integers, write a function that returns the length of the longest consecutive sequence. For example, [100, 4, 200, 1, 3, 2] should return 4 (the sequence 1, 2, 3, 4).", description: "Focus on time complexity — an O(n) solution is expected.", type: "CODING", probeOnShort: true, isRequired: true },
-      { order: 2, text: "How would you design a URL shortening service like bit.ly? Describe the key components, storage strategy, and how you would handle high traffic.", type: "OPEN_ENDED", probeOnShort: true, isRequired: true },
-      { order: 3, text: "Which of the following best describes the time complexity of inserting an element into a balanced binary search tree?", type: "SINGLE_CHOICE", options: [{ label: "O(1)", value: "O(1)" }, { label: "O(log n)", value: "O(log n)" }, { label: "O(n)", value: "O(n)" }, { label: "O(n log n)", value: "O(n log n)" }], isRequired: true },
-      { order: 4, text: "Describe your experience with CI/CD pipelines. How do you ensure code quality and reliable deployments?", type: "OPEN_ENDED", probeOnShort: true, isRequired: true },
+      { order: 0, text: "Walk me through a recent project where you solved a challenging technical problem. What was the problem, your approach, and the outcome?", type: "OPEN_ENDED", probeOnShort: true, isRequired: true, difficultyLevel: 4, skillTag: "problem_solving", competencyGroup: "technical" },
+      { order: 1, text: "Given an array of integers, write a function that returns the length of the longest consecutive sequence. For example, [100, 4, 200, 1, 3, 2] should return 4 (the sequence 1, 2, 3, 4).", description: "Focus on time complexity — an O(n) solution is expected.", type: "CODING", probeOnShort: true, isRequired: true, difficultyLevel: 7, skillTag: "data_structures", competencyGroup: "technical" },
+      { order: 2, text: "How would you design a URL shortening service like bit.ly? Describe the key components, storage strategy, and how you would handle high traffic.", type: "OPEN_ENDED", probeOnShort: true, isRequired: true, difficultyLevel: 8, skillTag: "system_design", competencyGroup: "technical" },
+      { order: 3, text: "Which of the following best describes the time complexity of inserting an element into a balanced binary search tree?", type: "SINGLE_CHOICE", options: [{ label: "O(1)", value: "O(1)" }, { label: "O(log n)", value: "O(log n)" }, { label: "O(n)", value: "O(n)" }, { label: "O(n log n)", value: "O(n log n)" }], isRequired: true, difficultyLevel: 3, skillTag: "complexity_theory", competencyGroup: "technical" },
+      { order: 4, text: "Describe your experience with CI/CD pipelines. How do you ensure code quality and reliable deployments?", type: "OPEN_ENDED", probeOnShort: true, isRequired: true, difficultyLevel: 5, skillTag: "devops", competencyGroup: "technical" },
     ],
   },
   {

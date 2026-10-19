@@ -1,5 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { extractJson } from "@/lib/ai/extract-json";
+import { getProvider } from "@/lib/ai/registry";
 import { protectedProcedure, router } from "../trpc";
 import { getOrgMembership, assertMinRole, hasProjectAccess, filterAccessibleProjectIds, getEffectiveProjectRole, type MemberRole } from "../trpc";
 
@@ -29,6 +31,9 @@ const questionInput = z.object({
   isRequired: z.boolean().default(true),
   allowFileUpload: z.boolean().default(false),
   allowedFileTypes: z.array(z.string()).default([]),
+  difficultyLevel: z.number().int().min(1).max(10).optional().default(5),
+  skillTag: z.string().nullable().optional(),
+  competencyGroup: z.string().nullable().optional(),
 });
 
 async function verifyInterviewAccess(
@@ -75,6 +80,158 @@ async function verifyInterviewAccess(
 }
 
 export const questionRouter = router({
+  prepareAdaptivePool: protectedProcedure
+    .input(z.object({ interviewId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { role } = await verifyInterviewAccess(ctx.supabase, input.interviewId, ctx.user.id);
+      assertMinRole(role, "MEMBER");
+
+      const { data: interview, error } = await ctx.supabase
+        .from("interviews")
+        .select("id, title, objective, llmProvider, llmModel, questions(*)")
+        .eq("id", input.interviewId)
+        .single();
+      if (error || !interview) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Interview not found" });
+      }
+
+      const questions = ((interview.questions ?? []) as Array<{
+        id: string;
+        text: string;
+        type: string;
+        description?: string | null;
+        order: number;
+      }>).sort((a, b) => a.order - b.order);
+
+      if (questions.length < 4) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Add at least 4 questions before preparing an adaptive pool.",
+        });
+      }
+
+      const provider = getProvider(interview.llmProvider);
+      const response = await provider.generateResponse({
+        model: interview.llmModel ?? undefined,
+        temperature: 0.1,
+        maxTokens: 1200,
+        messages: [{
+          role: "user",
+          content: `Prepare adaptive-testing metadata for this existing interview.
+Do not rewrite question text. Return JSON only with a "questions" array containing one entry for every question.
+Use difficultyLevel 1-10, a concise snake_case skillTag, and a broad competencyGroup.
+Use at least two competency groups when the questions cover multiple dimensions.
+Spread difficulty levels across easy (1-3), medium (4-7), and hard (8-10) when the question content supports it.
+
+Interview: ${interview.title}
+Objective: ${interview.objective ?? "Not provided"}
+Questions:
+${questions.map((question) => `${question.order + 1}. [${question.id}] ${question.type}: ${question.text}`).join("\n")}
+
+Required JSON shape:
+{"questions":[{"id":"question id","difficultyLevel":1,"skillTag":"snake_case","competencyGroup":"technical"}]}`,
+        }],
+      });
+
+      const parsed = extractJson<{
+        questions?: Array<{
+          id?: unknown;
+          difficultyLevel?: unknown;
+          skillTag?: unknown;
+          competencyGroup?: unknown;
+        }>;
+      }>(response.content);
+      const suggestions = parsed.questions ?? [];
+      const byId = new Map(suggestions.map((suggestion) => [suggestion.id, suggestion]));
+
+      if (
+        suggestions.length !== questions.length ||
+        questions.some((question) => {
+          const suggestion = byId.get(question.id);
+          return (
+            !suggestion ||
+            !Number.isInteger(suggestion.difficultyLevel) ||
+            Number(suggestion.difficultyLevel) < 1 ||
+            Number(suggestion.difficultyLevel) > 10 ||
+            typeof suggestion.skillTag !== "string" ||
+            !suggestion.skillTag.trim() ||
+            typeof suggestion.competencyGroup !== "string" ||
+            !suggestion.competencyGroup.trim()
+          );
+        })
+      ) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The AI returned incomplete adaptive metadata. Please try again.",
+        });
+      }
+
+      return {
+        interviewId: input.interviewId,
+        suggestions: questions.map((question) => {
+          const suggestion = byId.get(question.id)!;
+          return {
+            id: question.id,
+            text: question.text,
+            difficultyLevel: Number(suggestion.difficultyLevel),
+            skillTag: String(suggestion.skillTag).trim(),
+            competencyGroup: String(suggestion.competencyGroup).trim(),
+          };
+        }),
+      };
+    }),
+
+  applyAdaptivePool: protectedProcedure
+    .input(z.object({
+      interviewId: z.string(),
+      suggestions: z.array(z.object({
+        id: z.string(),
+        difficultyLevel: z.number().int().min(1).max(10),
+        skillTag: z.string().min(1),
+        competencyGroup: z.string().min(1),
+      })).min(4),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { role } = await verifyInterviewAccess(ctx.supabase, input.interviewId, ctx.user.id);
+      assertMinRole(role, "MEMBER");
+
+      const { data: questions } = await ctx.supabase
+        .from("questions")
+        .select("id")
+        .eq("interviewId", input.interviewId);
+      const questionIds = new Set((questions ?? []).map((question) => question.id));
+
+      if (
+        input.suggestions.some((suggestion) => !questionIds.has(suggestion.id)) ||
+        input.suggestions.length !== questionIds.size
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Adaptive metadata does not match this interview's question pool.",
+        });
+      }
+
+      const results = await Promise.all(
+        input.suggestions.map((suggestion) =>
+          ctx.supabase
+            .from("questions")
+            .update({
+              difficultyLevel: suggestion.difficultyLevel,
+              skillTag: suggestion.skillTag.trim(),
+              competencyGroup: suggestion.competencyGroup.trim(),
+            })
+            .eq("id", suggestion.id)
+            .eq("interviewId", input.interviewId),
+        ),
+      );
+      const failed = results.find((result) => result.error);
+      if (failed?.error) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: failed.error.message });
+      }
+
+      return { success: true };
+    }),
+
   create: protectedProcedure
     .input(z.object({ interviewId: z.string(), order: z.number().optional(), ...questionInput.shape }))
     .mutation(async ({ ctx, input }) => {

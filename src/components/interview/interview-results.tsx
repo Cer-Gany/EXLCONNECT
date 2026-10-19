@@ -22,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { AdaptiveReportView } from "@/components/interview/adaptive-report-view";
 import { getSessionOverallScore } from "@/lib/session-score";
 import { trpc } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -719,6 +720,7 @@ function SessionDetail({
 
   const hasReport = !!(
     summary.data?.summary ||
+    (summary.data as any)?.adaptiveReport ||
     criteriaEvaluations.length > 0 ||
     questionEvaluations.length > 0 ||
     researchFindings.length > 0 ||
@@ -1244,6 +1246,13 @@ function SessionDetail({
                   </p>
                 </CardContent>
               </Card>
+            )}
+
+            {/* Adaptive Testing Report */}
+            {(summary.data as any)?.adaptiveReport && (
+              <AdaptiveReportView
+                report={(summary.data as any).adaptiveReport}
+              />
             )}
 
             {/* Per-Question Evaluations */}
