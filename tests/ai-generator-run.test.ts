@@ -9,6 +9,7 @@ import {
 const ENV_KEYS = [
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
+  "GROQ_API_KEY",
   "KIMI_API_KEY",
   "MINIMAX_API_KEY",
 ] as const;
@@ -36,11 +37,12 @@ function withEnv(
   }
 }
 
-test("getGeneratorModelChain prefers OpenAI, then Gemini, Kimi, and MiniMax", () => {
+test("getGeneratorModelChain prefers OpenAI, then Gemini, Groq, Kimi, and MiniMax", () => {
   withEnv(
     {
       OPENAI_API_KEY: "test-openai",
       GEMINI_API_KEY: "test-gemini",
+      GROQ_API_KEY: "test-groq",
       KIMI_API_KEY: "test-kimi",
       MINIMAX_API_KEY: "test-minimax",
     },
@@ -48,6 +50,7 @@ test("getGeneratorModelChain prefers OpenAI, then Gemini, Kimi, and MiniMax", ()
       assert.deepEqual(getGeneratorModelChain(), [
         "gpt-4o-mini",
         "gemini-3.1-flash-lite",
+        "openai/gpt-oss-120b",
         "moonshot-v1-8k",
         "MiniMax-M2.1-lightning",
       ]);
@@ -61,6 +64,7 @@ test("getGeneratorModelChain uses Gemini when OpenAI is not configured", () => {
     {
       OPENAI_API_KEY: undefined,
       GEMINI_API_KEY: "test-gemini",
+      GROQ_API_KEY: undefined,
       KIMI_API_KEY: undefined,
       MINIMAX_API_KEY: "test-minimax",
     },
@@ -74,11 +78,28 @@ test("getGeneratorModelChain uses Gemini when OpenAI is not configured", () => {
   );
 });
 
+test("getGeneratorModelChain uses Groq when OpenAI and Gemini are not configured", () => {
+  withEnv(
+    {
+      OPENAI_API_KEY: undefined,
+      GEMINI_API_KEY: undefined,
+      GROQ_API_KEY: "test-groq",
+      KIMI_API_KEY: undefined,
+      MINIMAX_API_KEY: undefined,
+    },
+    () => {
+      assert.deepEqual(getGeneratorModelChain(), ["openai/gpt-oss-120b"]);
+      assert.equal(resolveGeneratorModel(), "openai/gpt-oss-120b");
+    },
+  );
+});
+
 test("getGeneratorModelChain uses MiniMax when only MiniMax is configured", () => {
   withEnv(
     {
       OPENAI_API_KEY: undefined,
       GEMINI_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
       KIMI_API_KEY: undefined,
       MINIMAX_API_KEY: "test-minimax",
     },

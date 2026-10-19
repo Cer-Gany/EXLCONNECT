@@ -20,6 +20,9 @@ export function getGeneratorModelChain(): string[] {
   if (process.env.GEMINI_API_KEY?.trim()) {
     pushUnique(chain, "gemini-3.1-flash-lite");
   }
+  if (process.env.GROQ_API_KEY?.trim()) {
+    pushUnique(chain, "openai/gpt-oss-120b");
+  }
   if (process.env.KIMI_API_KEY?.trim()) {
     pushUnique(chain, "moonshot-v1-8k");
   }
@@ -28,7 +31,7 @@ export function getGeneratorModelChain(): string[] {
   }
   if (chain.length === 0) {
     throw new Error(
-      "No generator LLM configured. Set OPENAI_API_KEY, GEMINI_API_KEY, KIMI_API_KEY, or MINIMAX_API_KEY.",
+      "No generator LLM configured. Set OPENAI_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, KIMI_API_KEY, or MINIMAX_API_KEY.",
     );
   }
   return chain;

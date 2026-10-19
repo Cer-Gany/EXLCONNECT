@@ -1,6 +1,7 @@
 import { type LLMProvider } from "./types";
 import { OpenAIProvider } from "./providers/openai";
 import { GeminiProvider } from "./providers/gemini";
+import { GroqProvider } from "./providers/groq";
 import { KimiProvider } from "./providers/kimi";
 import { MinimaxProvider } from "./providers/minimax";
 
@@ -12,6 +13,7 @@ function registerProvider(provider: LLMProvider) {
 
 registerProvider(new OpenAIProvider());
 registerProvider(new GeminiProvider());
+registerProvider(new GroqProvider());
 registerProvider(new KimiProvider());
 registerProvider(new MinimaxProvider());
 
@@ -26,12 +28,13 @@ export function getProvider(idOrModel?: string | null): LLMProvider {
       }
     }
   }
-  // Default fallback order: openai → gemini → kimi → minimax
+  // Default fallback order: gemini → groq → openai → kimi → minimax
   if (process.env.GEMINI_API_KEY) return providers.get("gemini")!;
+  if (process.env.GROQ_API_KEY) return providers.get("groq")!;
   if (process.env.OPENAI_API_KEY) return providers.get("openai")!;
   if (process.env.KIMI_API_KEY) return providers.get("kimi")!;
   if (process.env.MINIMAX_API_KEY) return providers.get("minimax")!;
-  throw new Error("No LLM provider configured. Set OPENAI_API_KEY, GEMINI_API_KEY, KIMI_API_KEY, or MINIMAX_API_KEY.");
+  throw new Error("No LLM provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, KIMI_API_KEY, or MINIMAX_API_KEY.");
 }
 
 export function listProviders(): LLMProvider[] {
@@ -44,27 +47,33 @@ export function listProviders(): LLMProvider[] {
  */
 export const REPORT_MODEL = process.env.GEMINI_API_KEY
   ? "gemini-2.5-flash"
-  : process.env.OPENAI_API_KEY
-    ? "gpt-4o"
-    : process.env.KIMI_API_KEY
-      ? "kimi-k2.6"
-      : "MiniMax-M2.1-lightning";
+  : process.env.GROQ_API_KEY
+    ? "openai/gpt-oss-120b"
+    : process.env.OPENAI_API_KEY
+      ? "gpt-4o"
+      : process.env.KIMI_API_KEY
+        ? "kimi-k2.6"
+        : "MiniMax-M2.1-lightning";
 
 /**
  * Model used for interview question generation and refinement.
  */
 export const GENERATOR_MODEL = process.env.GEMINI_API_KEY
   ? "gemini-2.5-flash"
-  : process.env.OPENAI_API_KEY
-    ? "gpt-4o-mini"
-    : process.env.KIMI_API_KEY
-      ? "moonshot-v1-8k"
-      : "MiniMax-M2.1-lightning";
+  : process.env.GROQ_API_KEY
+    ? "openai/gpt-oss-120b"
+    : process.env.OPENAI_API_KEY
+      ? "gpt-4o-mini"
+      : process.env.KIMI_API_KEY
+        ? "moonshot-v1-8k"
+        : "MiniMax-M2.1-lightning";
 
 export const PRIMARY_GENERATOR_MODEL = GENERATOR_MODEL;
 
-export const FALLBACK_GENERATOR_MODEL = process.env.MINIMAX_API_KEY
-  ? "MiniMax-M2.1-lightning"
-  : process.env.KIMI_API_KEY
-    ? "moonshot-v1-8k"
-    : GENERATOR_MODEL;
+export const FALLBACK_GENERATOR_MODEL = process.env.GROQ_API_KEY
+  ? "openai/gpt-oss-120b"
+  : process.env.MINIMAX_API_KEY
+    ? "MiniMax-M2.1-lightning"
+    : process.env.KIMI_API_KEY
+      ? "moonshot-v1-8k"
+      : GENERATOR_MODEL;
