@@ -72,8 +72,9 @@ For EASY questions: a score of 7+ requires a clear, confident, and reasonably co
 For HARD questions: a score of 7+ requires showing real depth, nuance, or mastery.
 
 IMPORTANT: Score ONLY based on the answer's quality for the specific question asked.
-Do not penalize candidates for being concise if they covered the key points.
-Do not reward length alone — a 2-sentence perfect answer beats a 10-sentence vague one.
+- SPEECH-TO-TEXT / ASR TOLERANCE: Candidate answers are transcribed from live spoken audio and may contain phonetic transcription artifacts, minor homophone mix-ups, or technical jargon misspellings (e.g., "sequel" for "SQL", "dockers" for "Docker", omitted punctuation). Do NOT penalize candidates for speech recognition imperfections. Focus strictly on their conceptual grasp, reasoning, and semantic intent.
+- Do not penalize candidates for being concise if they covered the key points.
+- Do not reward length alone — a 2-sentence perfect answer beats a 10-sentence vague one.
 
 Respond ONLY with valid JSON (no markdown, no preamble):
 {

@@ -87,9 +87,9 @@ const USE_VOLC_ASR_PRIMARY = VOLC_ASR_AVAILABLE && ASR_PRIMARY === "volc";
 const USE_VOLC_ASR_INTERIMS = VOLC_ASR_AVAILABLE;
 
 // Minimum RMS energy for user audio to be forwarded. 16-bit PCM silence is 0;
-// typical speech is 500-5000.
-const MIN_AUDIO_RMS = 160;
-const TTS_BARGE_IN_RMS = 2400;
+// typical speech is 500-5000. Lowered to 90 to ensure softer voices and quiet mic setups pass through.
+const MIN_AUDIO_RMS = 90;
+const TTS_BARGE_IN_RMS = 1200;
 const TTS_BARGE_IN_FRAME_COUNT = 3;
 // After the last loud frame keep forwarding (silence included) for this long so
 // Gemini's server-side VAD can see the end of speech.
@@ -747,7 +747,9 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
   let lastUserInput = 0;
   let lastLoudAt = 0;
   let lastTtsAudioTime = 0;
-  const TTS_ECHO_COOLDOWN_MS = 1500;
+  // Brief 400ms echo suppression window after AI finishes speaking to let room acoustics settle
+  // without dropping the start of the candidate's response.
+  const TTS_ECHO_COOLDOWN_MS = 400;
   let isTransitioning = false;
   let pendingInterviewComplete = false;
   let interviewCompleteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -770,6 +772,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
   let pendingQuestionPrompt: string | null = null;
   let pendingPromptTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingGoAwayReconnect = false;
 
   const conversationHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
   const questionTranscript: Array<{ role: "user" | "assistant"; text: string }> = [];
@@ -1600,6 +1603,13 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
 
     if (completedFarewellTurn) {
       markInterviewComplete("after farewell");
+    } else if (pendingGoAwayReconnect && !interviewDone && !isTransitioning && !reconnecting && resumeHandle) {
+      pendingGoAwayReconnect = false;
+      log.info("Proactively cycling Gemini session at turn boundary following goAway notice");
+      send({ type: "session_reconnecting" });
+      reconnectGemini().catch((err) => {
+        log.error("Proactive reconnect failed:", err);
+      });
     }
   }
 
@@ -1618,7 +1628,8 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
     }
 
     if (msg.goAway) {
-      log.warn(`Gemini goAway received (timeLeft=${msg.goAway.timeLeft ?? "unknown"}) — will resume on close`);
+      log.warn(`Gemini goAway received (timeLeft=${msg.goAway.timeLeft ?? "unknown"}) — scheduling clean cycle`);
+      pendingGoAwayReconnect = true;
     }
 
     if (msg.toolCallCancellation?.ids?.length) {
@@ -1685,7 +1696,7 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
         },
         realtimeInputConfig: {
           automaticActivityDetection: {
-            startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
+            startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
             endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
             prefixPaddingMs: 150,
             silenceDurationMs: GEMINI_VAD_SILENCE_MS,
@@ -1749,7 +1760,16 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
           await waitForGeminiReady();
           reconnecting = false;
 
-          if (!handle) {
+          log.info("Gemini reconnected");
+          send({ type: "session_reconnected" });
+          send({ type: "session_resumed" });
+
+          if (pendingQuestionPrompt) {
+            log.info(`Resending pending question prompt after reconnect: Q${currentQuestionIndex + 1}`);
+            const promptToResend = pendingQuestionPrompt;
+            clearQuestionPrompt();
+            sendQuestionPrompt(promptToResend);
+          } else if (!handle) {
             // No server-side state to resume: replay recent history as context.
             const turns = conversationHistory.map((h) => ({
               role: h.role === "assistant" ? "model" : "user",
@@ -1765,9 +1785,17 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
             gSend(
               `[SYSTEM] The connection was briefly interrupted and has been restored. Continue the interview from question ${currentQuestionIndex + 1} naturally with a very short apology, then continue.`,
             );
+          } else if (userCommittedWordsThisQuestion === 0 && assistantTurnsThisQuestion === 0 && !interviewDone) {
+            // Resumed with handle, but model had not spoken on this question yet before disconnect
+            const currentQ = sortedQuestions[currentQuestionIndex];
+            if (currentQ) {
+              const qDetails = formatQuestionForPrompt(currentQ, currentQuestionIndex, sortedQuestions.length);
+              log.info(`Prompting Gemini to introduce Q${currentQuestionIndex + 1} after session reconnect`);
+              sendQuestionPrompt(
+                `[SYSTEM] The session connection was refreshed. You are on question ${currentQuestionIndex + 1}:\n${qDetails}\nPlease introduce and ask this question now.`,
+              );
+            }
           }
-          log.info("Gemini reconnected");
-          send({ type: "session_resumed" });
           return;
         } catch (err) {
           lastErr = err;
@@ -1865,6 +1893,18 @@ async function handleInterview(browserWs: WebSocket, ctx: InterviewContext) {
         questionIndex: currentQuestionIndex,
         totalQuestions: sortedQuestions.length,
       });
+
+      // If session is near expiration (>8.5 min) or goAway was received, cycle now before asking next Q
+      if ((pendingGoAwayReconnect || Date.now() - sessionStart > 510_000) && resumeHandle && !reconnecting) {
+        pendingGoAwayReconnect = false;
+        log.info("Refreshing Gemini session during question transition before sending new question");
+        try {
+          await reconnectGemini();
+        } catch (err) {
+          log.warn("Session refresh during transition failed, continuing with existing session:", err);
+        }
+      }
+
       isTransitioning = false;
       log.info(`${dir} Q${currentQuestionIndex + 1}/${sortedQuestions.length}`);
 

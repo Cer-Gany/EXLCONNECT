@@ -1127,6 +1127,7 @@ export function useVoice({
           break;
 
         case "session_reconnected":
+        case "session_resumed":
           clearResponseWatchdog();
           clearAsrInterimWatchdog();
           clearAsrProcessingTimer();
