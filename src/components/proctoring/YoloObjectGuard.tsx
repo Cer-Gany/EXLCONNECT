@@ -13,26 +13,41 @@ interface YoloGuardProps {
   enabled?: boolean;
 }
 
+// ── Prohibited object labels (EfficientDet COCO classes) ─────────────────────
 const PROHIBITED_LABELS = new Set([
+  // Communication / AI devices
   "cell phone",
+  "laptop",
+  "tablet",
+  "remote",
+  // Audio-assistance indicators
+  "headphones",
+  // Reference material
   "book",
 ]);
 
+// Confidence threshold
+// 0.40 gives good real-world sensitivity without too many false positives.
+const SCORE_THRESHOLD = 0.40;
+
+// How long after a violation fires before the same label can fire again
 const DETECTION_COOLDOWN_MS = 8_000;
+
+// Run object detection every N milliseconds.
+// EfficientDet Lite-0 takes ~10–20 ms on GPU, so 750 ms is comfortably safe.
+const DETECTION_INTERVAL_MS = 750;
 
 export default function YoloObjectGuard({
   onObjectDetected,
   enabled = true,
 }: YoloGuardProps) {
   const [objectStatus, setObjectStatus] = useState("Initializing Object AI...");
-  const [detectedObj, setDetectedObj] = useState<string | null>(null);
-  const detectorRef = useRef<ObjectDetector | null>(null);
+  const [detectedObj, setDetectedObj]   = useState<string | null>(null);
+  const detectorRef        = useRef<ObjectDetector | null>(null);
   const onObjectDetectedRef = useRef(onObjectDetected);
-  const lastReportedAtRef = useRef<Record<string, number>>({});
+  const lastReportedAtRef  = useRef<Record<string, number>>({});
 
-  useEffect(() => {
-    onObjectDetectedRef.current = onObjectDetected;
-  }, [onObjectDetected]);
+  useEffect(() => { onObjectDetectedRef.current = onObjectDetected; }, [onObjectDetected]);
 
   useEffect(() => {
     suppressMediaPipeConsoleErrors();
@@ -50,38 +65,33 @@ export default function YoloObjectGuard({
           "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite";
 
         let detector: ObjectDetector;
+        const baseOpts = {
+          baseOptions: { modelAssetPath, delegate: "GPU" as const },
+          scoreThreshold: SCORE_THRESHOLD,
+          runningMode: "VIDEO" as const,
+          maxResults: 6,
+        };
+
         try {
-          detector = await ObjectDetector.createFromOptions(vision, {
-            baseOptions: { modelAssetPath, delegate: "GPU" },
-            scoreThreshold: 0.45,
-            runningMode: "VIDEO",
-          });
+          detector = await ObjectDetector.createFromOptions(vision, baseOpts);
         } catch {
           detector = await ObjectDetector.createFromOptions(vision, {
-            baseOptions: { modelAssetPath, delegate: "CPU" },
-            scoreThreshold: 0.45,
-            runningMode: "VIDEO",
+            ...baseOpts,
+            baseOptions: { modelAssetPath, delegate: "CPU" as const },
           });
         }
 
-        if (!active) {
-          try {
-            detector.close();
-          } catch {
-            // ignore
-          }
-          return;
-        }
+        if (!active) { try { detector.close(); } catch { /**/ } return; }
 
         detectorRef.current = detector;
-        setObjectStatus("Scanning for phones/books...");
+        console.log("[YoloObjectGuard] ✅ Model ready");
+        setObjectStatus("Scanning for prohibited items...");
 
         intervalId = setInterval(() => {
           if (!active || !detectorRef.current) return;
+
           const videoEl =
-            (document.querySelector(
-              'video[data-proctoring-video="true"]',
-            ) as HTMLVideoElement | null) ??
+            (document.querySelector('video[data-proctoring-video="true"]') as HTMLVideoElement | null) ??
             (document.querySelector("video") as HTMLVideoElement | null);
 
           if (
@@ -90,26 +100,34 @@ export default function YoloObjectGuard({
             videoEl.videoWidth === 0 ||
             videoEl.paused ||
             videoEl.ended
-          ) {
-            return;
-          }
+          ) return;
 
           try {
             const nowMs = Math.max(Math.floor(performance.now()), lastTimestampMs + 1);
             lastTimestampMs = nowMs;
-            const result = detectorRef.current.detectForVideo(
-              videoEl,
-              nowMs,
-            );
+            const result = detectorRef.current.detectForVideo(videoEl, nowMs);
+
+            // Log ALL detections in dev so you can see what the model sees
+            if (process.env.NODE_ENV === "development" && result.detections.length > 0) {
+              const all = result.detections.flatMap((d) =>
+                d.categories.map((c) => `${c.categoryName}(${((c.score ?? 0) * 100).toFixed(0)}%)`),
+              );
+              console.log("[YoloObjectGuard] detected:", all.join(", "));
+            }
+
+            // Collect all prohibited detections this frame
             const prohibited = result.detections
               .flatMap((d) => d.categories)
-              .find((c) =>
-                PROHIBITED_LABELS.has(c.categoryName.toLowerCase()),
-              );
+              .filter((c) => PROHIBITED_LABELS.has(c.categoryName.toLowerCase()));
 
-            if (prohibited) {
-              const label = prohibited.categoryName;
+            if (prohibited.length > 0) {
+              // Report the highest-confidence prohibited object first
+              const top = prohibited.reduce((a, b) =>
+                (a.score ?? 0) >= (b.score ?? 0) ? a : b,
+              );
+              const label = top.categoryName;
               setDetectedObj(label);
+
               const now = Date.now();
               const lastAt = lastReportedAtRef.current[label] ?? 0;
               if (now - lastAt >= DETECTION_COOLDOWN_MS) {
@@ -122,11 +140,9 @@ export default function YoloObjectGuard({
           } catch {
             // Ignore transient frame errors
           }
-        }, 1500);
+        }, DETECTION_INTERVAL_MS);
       } catch {
-        if (active) {
-          setObjectStatus("Object AI unavailable");
-        }
+        if (active) setObjectStatus("Object AI unavailable");
       }
     }
 
@@ -136,11 +152,7 @@ export default function YoloObjectGuard({
       active = false;
       if (intervalId) clearInterval(intervalId);
       if (detectorRef.current) {
-        try {
-          detectorRef.current.close();
-        } catch {
-          // ignore
-        }
+        try { detectorRef.current.close(); } catch { /**/ }
         detectorRef.current = null;
       }
     };

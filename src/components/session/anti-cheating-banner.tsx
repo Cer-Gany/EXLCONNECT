@@ -2,29 +2,51 @@
 
 import MediaPipeGuard from "@/components/proctoring/MediaPipeGuard";
 import YoloObjectGuard from "@/components/proctoring/YoloObjectGuard";
+import { useAudioGuard } from "@/hooks/use-audio-guard";
 import type { AntiCheatingViolation } from "@/hooks/use-anti-cheating";
-import { useAntiCheating } from "@/hooks/use-anti-cheating";
+import { getRiskLevel, useAntiCheating, type RiskLevel } from "@/hooks/use-anti-cheating";
 import { useToast } from "@/hooks/use-toast";
 import { trpc } from "@/lib/trpc/client";
-import { AlertTriangle, ChevronDown, ChevronUp, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  ShieldCheck,
+  Mic,
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 interface AntiCheatingGuardProps {
   enabled: boolean;
   sessionId?: string;
+  /** Pass the AI interviewer's speaking state so the audio guard can suppress
+   *  false positives while TTS audio is playing through the speakers. */
+  aiIsSpeaking?: boolean;
 }
 
-export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps) {
+// ── Risk level → visual style mapping ─────────────────────────────────────────
+const RISK_STYLES: Record<RiskLevel, { bg: string; text: string; label: string }> = {
+  GREEN:  { bg: "bg-emerald-500", text: "text-emerald-300", label: "Low Risk"  },
+  YELLOW: { bg: "bg-yellow-400",  text: "text-yellow-300",  label: "Caution"   },
+  ORANGE: { bg: "bg-orange-500",  text: "text-orange-300",  label: "Warning"   },
+  RED:    { bg: "bg-red-600",     text: "text-red-300",     label: "High Risk" },
+};
+
+export function AntiCheatingGuard({ enabled, sessionId, aiIsSpeaking = false }: AntiCheatingGuardProps) {
   const { toast } = useToast();
-  const [warningOpen, setWarningOpen] = useState(false);
-  const [departureCount, setDepartureCount] = useState(0);
+  const [warningOpen, setWarningOpen]             = useState(false);
+  const [departureCount, setDepartureCount]       = useState(0);
   const [proctoringCollapsed, setProctoringCollapsed] = useState(true);
-  const lastDepartureTs = useRef(0);
-  const lastPasteToast = useRef(0);
-  const lastProctorToast = useRef(0);
+  const [cameraStream, setCameraStream]           = useState<MediaStream | null>(null);
+
+  const lastDepartureTs   = useRef(0);
+  const lastPasteToast    = useRef(0);
+  const lastProctorToast  = useRef(0);
+  const lastAudioToast    = useRef(0);
 
   const reportMutation = trpc.session.reportAntiCheatingViolation.useMutation();
 
+  // ── Persist violation to backend ─────────────────────────────────────────────
   const persistViolation = useCallback(
     (violation: AntiCheatingViolation) => {
       if (!sessionId) return;
@@ -40,6 +62,27 @@ export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps
     [sessionId, reportMutation],
   );
 
+  // ── Risk level change callback ────────────────────────────────────────────────
+  const handleRiskLevelChange = useCallback(
+    (level: RiskLevel, score: number) => {
+      if (level === "ORANGE" || level === "RED") {
+        toast({
+          title: (
+            <span className={level === "RED" ? "text-red-500" : "text-orange-500"}>
+              {level === "RED" ? "🚨 High Integrity Risk" : "⚠️ Elevated Risk Detected"}
+            </span>
+          ) as unknown as string,
+          description:
+            level === "RED"
+              ? `Your proctoring risk score has reached ${score}. This session is flagged for review.`
+              : `Multiple integrity signals detected (score: ${score}). Please ensure compliance.`,
+        });
+      }
+    },
+    [toast],
+  );
+
+  // ── Departure handler ─────────────────────────────────────────────────────────
   const recordDeparture = useCallback(() => {
     const now = Date.now();
     if (now - lastDepartureTs.current < 500) return;
@@ -48,6 +91,7 @@ export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps
     setWarningOpen(true);
   }, []);
 
+  // ── Violation dispatcher ──────────────────────────────────────────────────────
   const handleViolation = useCallback(
     (violation: AntiCheatingViolation) => {
       persistViolation(violation);
@@ -62,30 +106,44 @@ export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps
           if (now - lastPasteToast.current < 3000) return;
           lastPasteToast.current = now;
           toast({
-            title: ((<span className="text-red-600 dark:text-red-400">External paste blocked</span>) as unknown as string),
-            description:
-              "Pasting content from outside the interview is not allowed.",
+            title: (<span className="text-red-600 dark:text-red-400">External paste blocked</span>) as unknown as string,
+            description: "Pasting content from outside the interview is not allowed.",
           });
           break;
         }
 
         case "multi_screen":
           toast({
-            title: ((<span className="text-red-600 dark:text-red-400">Additional display detected</span>) as unknown as string),
-            description:
-              "For the best experience, please use a single screen during this interview.",
+            title: (<span className="text-red-600 dark:text-red-400">Additional display detected</span>) as unknown as string,
+            description: "For the best experience, please use a single screen during this interview.",
           });
           break;
+
+        case "suspicious_audio":
+        case "loud_sound": {
+          const now = Date.now();
+          if (now - lastAudioToast.current < 8000) return;
+          lastAudioToast.current = now;
+          toast({
+            title: (<span className="text-amber-600 dark:text-amber-400">🎤 Audio Alert</span>) as unknown as string,
+            description:
+              violation.type === "suspicious_audio"
+                ? "Sustained speech detected. Please ensure you are alone and not reading answers aloud."
+                : "Loud sound detected. Please maintain a quiet environment.",
+          });
+          break;
+        }
 
         case "multiple_faces":
         case "face_not_visible":
         case "looking_away":
+        case "gaze_off_screen":
         case "prohibited_object": {
           const now = Date.now();
           if (now - lastProctorToast.current < 8000) return;
           lastProctorToast.current = now;
           toast({
-            title: ((<span className="text-amber-600 dark:text-amber-400">Proctoring Notice</span>) as unknown as string),
+            title: (<span className="text-amber-600 dark:text-amber-400">Proctoring Notice</span>) as unknown as string,
             description:
               violation.detail ||
               "Please remain centered in front of your camera with no unauthorized items visible.",
@@ -97,54 +155,74 @@ export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps
     [toast, recordDeparture, persistViolation],
   );
 
+  // ── Translate proctoring component string events to typed violations ──────────
   const handleProctoringViolation = useCallback(
     (reason: string) => {
       const lower = reason.toLowerCase();
       let type: AntiCheatingViolation["type"] = "looking_away";
       let detail = reason;
 
-      if (lower.includes("multiple faces") || lower.includes("multiple_faces")) {
+      if (lower.includes("multiple faces") || lower === "multiple_faces") {
         type = "multiple_faces";
-        if (lower === "multiple_faces") {
-          detail = "Multiple faces detected in the camera frame.";
-        }
+        detail = "Multiple faces detected in the camera frame.";
       } else if (
         lower.includes("no face") ||
         lower.includes("not visible") ||
-        lower.includes("face_not_visible") ||
+        lower === "face_not_visible" ||
         lower.includes("candidate missing")
       ) {
         type = "face_not_visible";
-        if (lower === "face_not_visible") {
-          detail = "Candidate face is not visible in the camera frame.";
-        }
-      } else if (
-        lower.includes("prohibited") ||
-        lower.includes("detected:") ||
-        lower.includes("prohibited_object")
-      ) {
+        detail = "Candidate face is not visible in the camera frame.";
+      } else if (lower.includes("gaze") || lower === "gaze_off_screen") {
+        type = "gaze_off_screen";
+        detail = "Candidate gaze is directed away from the screen.";
+      } else if (lower.includes("prohibited") || lower.includes("detected:") || lower === "prohibited_object") {
         type = "prohibited_object";
       } else if (lower === "looking_away") {
         type = "looking_away";
         detail = "Candidate appears to be looking away from the screen.";
+      } else if (lower.includes("liveness") || lower === "no_blink_detected") {
+        type = "face_not_visible";
+        detail = "Liveness check failed — no blink detected. Possible spoofing.";
       }
 
-      handleViolation({
-        type,
-        timestamp: Date.now(),
-        detail,
-      });
+      handleViolation({ type, timestamp: Date.now(), detail });
     },
     [handleViolation],
   );
 
-  useAntiCheating({ enabled, onViolation: handleViolation });
+  // ── Audio guard violation handler ─────────────────────────────────────────────
+  const handleAudioViolation = useCallback(
+    (type: "suspicious_audio" | "loud_sound", detail: string) => {
+      handleViolation({ type, timestamp: Date.now(), detail });
+    },
+    [handleViolation],
+  );
+
+  // ── useAntiCheating hook (tab blur, paste, multi-screen) ──────────────────────
+  const { riskScore, riskLevel } = useAntiCheating({
+    enabled,
+    onViolation: handleViolation,
+    onRiskLevelChange: handleRiskLevelChange,
+  });
+
+  // ── Audio guard ───────────────────────────────────────────────────────────────
+  useAudioGuard({
+    enabled,
+    onViolation: handleAudioViolation,
+    existingStream: cameraStream,
+    isSpeaking: aiIsSpeaking,
+  });
 
   if (!enabled) return null;
 
+  const riskStyle = RISK_STYLES[riskLevel];
+
   return (
     <>
+      {/* ── Floating proctoring panel ───────────────────────────────────────── */}
       <div className="fixed bottom-4 left-4 z-40 w-64 rounded-xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+        {/* Header / collapse toggle */}
         <button
           type="button"
           onClick={() => setProctoringCollapsed((prev) => !prev)}
@@ -154,28 +232,61 @@ export function AntiCheatingGuard({ enabled, sessionId }: AntiCheatingGuardProps
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
             AI Proctoring Active
           </span>
-          {proctoringCollapsed ? (
-            <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
-          )}
+
+          {/* Risk score badge */}
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${riskStyle.bg} text-white`}
+              title={`Risk score: ${riskScore}`}
+            >
+              {riskStyle.label}
+            </span>
+            {proctoringCollapsed ? (
+              <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            ) : (
+              <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
+            )}
+          </span>
         </button>
+
+        {/* ── Guards: ALWAYS mounted regardless of collapse state ────────────
+             The video element must have real dimensions for frames to be
+             valid. We render guards outside the collapsed container and
+             only hide them visually (opacity-0 + pointer-events-none +
+             absolute positioning so they take no layout space). */}
         <div
-          className={
+          aria-hidden="true"
+          className={`transition-all duration-200 overflow-hidden ${
             proctoringCollapsed
-              ? "sr-only pointer-events-none h-0 overflow-hidden"
+              ? "absolute opacity-0 pointer-events-none"
               : "flex flex-col gap-2 border-t border-slate-100 p-2 dark:border-slate-800"
-          }
+          }`}
         >
-          <MediaPipeGuard onViolation={handleProctoringViolation} />
+          <MediaPipeGuard
+            onViolation={handleProctoringViolation}
+            onStreamReady={setCameraStream}
+          />
           <YoloObjectGuard
             onObjectDetected={(obj) =>
               handleProctoringViolation(`Prohibited item detected: ${obj}`)
             }
           />
+
+          {/* Audio monitor indicator */}
+          <div className="bg-slate-900 border border-slate-700 rounded-lg p-2 w-full flex items-center gap-2 mt-1">
+            <Mic className="h-3 w-3 text-cyan-400 shrink-0" />
+            <span className="text-[11px] text-slate-400">Audio monitoring active</span>
+            <span className="ml-auto h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
+          </div>
+
+          {/* Score breakdown */}
+          <div className="text-[10px] text-slate-500 text-center pt-1">
+            Risk score: <span className={`font-bold ${riskStyle.text}`}>{riskScore}</span>
+          </div>
         </div>
       </div>
 
+      {/* ── Departure warning modal ─────────────────────────────────────────── */}
       {warningOpen && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="mx-4 w-full max-w-md rounded-xl border border-red-200 bg-white p-6 shadow-2xl dark:border-red-900 dark:bg-gray-900">
