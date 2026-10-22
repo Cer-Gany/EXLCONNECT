@@ -4,7 +4,7 @@ import MediaPipeGuard from "@/components/proctoring/MediaPipeGuard";
 import YoloObjectGuard from "@/components/proctoring/YoloObjectGuard";
 import { useAudioGuard } from "@/hooks/use-audio-guard";
 import type { AntiCheatingViolation } from "@/hooks/use-anti-cheating";
-import { getRiskLevel, useAntiCheating, type RiskLevel } from "@/hooks/use-anti-cheating";
+import { useAntiCheating, type RiskLevel } from "@/hooks/use-anti-cheating";
 import { useToast } from "@/hooks/use-toast";
 import { trpc } from "@/lib/trpc/client";
 import {

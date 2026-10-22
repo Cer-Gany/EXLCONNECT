@@ -13,7 +13,6 @@ import type {
   AdaptiveQuestion,
   DifficultyTier,
   LiveAdaptiveState,
-  ServedQuestion,
 } from "./types";
 import { DEFAULT_ADAPTIVE_CONFIG, getDifficultyTier } from "./types";
 

@@ -4,17 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import type { AdaptiveReport, CompetencyScore, PathStep } from "@/lib/adaptive/types";
+import type { AdaptiveReport, CompetencyScore } from "@/lib/adaptive/types";
 import {
   Activity,
   Award,
-  BarChart3,
   Brain,
   CheckCircle2,
-  ChevronRight,
   Compass,
-  Gauge,
-  HelpCircle,
   Layers,
   Sparkles,
   TrendingDown,

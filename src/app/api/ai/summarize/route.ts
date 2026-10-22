@@ -46,6 +46,7 @@ export async function POST(req: Request) {
       language: string;
       assessmentCriteria: { name: string; description: string }[] | null;
       questions: { text: string; order: number; type?: string }[];
+      adaptiveConfig?: unknown;
     };
 
     const msgs = (interviewSession.messages ?? []) as {
@@ -178,7 +179,7 @@ export async function POST(req: Request) {
       try {
         const liveState = interviewSession.adaptiveState as LiveAdaptiveState;
         const poolSize = interview.questions.length;
-        const adaptiveConfig = ((interview as any).adaptiveConfig ?? DEFAULT_ADAPTIVE_CONFIG) as AdaptiveConfig;
+        const adaptiveConfig = (interview.adaptiveConfig ?? DEFAULT_ADAPTIVE_CONFIG) as AdaptiveConfig;
         const adaptiveReport = buildAdaptiveReport(liveState, poolSize, adaptiveConfig);
         updatePayload.adaptiveReport = adaptiveReport;
       } catch (err) {

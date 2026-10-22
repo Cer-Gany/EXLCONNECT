@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 ### Prerequisites
 
-- **Node.js** >= 18
+- **Node.js** >= 20.9
 - **Docker** (for local Supabase)
 - At least one LLM API key (OpenAI recommended)
 
@@ -39,8 +39,8 @@ If you're working on voice interview features:
 
 ```bash
 # In separate terminals
-npm run dev:voice         # Kimi/Doubao voice relay on :8081
-npm run dev:openai-voice  # OpenAI voice relay on :8082
+npm run dev:voice         # Kimi/Doubao Doubao voice relay on :8766
+npm run dev:openai-voice  # OpenAI voice relay on :8767
 ```
 
 ## Making Changes

@@ -4,13 +4,11 @@ import test from "node:test";
 import {
   applyResponseToState,
   buildAdaptiveReport,
-  DEFAULT_ADAPTIVE_CONFIG,
   getDifficultyTier,
   initAdaptiveState,
   isCompetencyFloored,
   isCompetencyMastered,
   selectNextAdaptiveQuestion,
-  shouldEndAdaptiveInterview,
   thetaToPercentile,
   updateAbilityEstimate,
 } from "../src/lib/adaptive";
