@@ -207,7 +207,7 @@ export class GeminiProvider implements LLMProvider {
       ...(primaryModel !== this.defaultModel && this.defaultModel !== GEMINI_RESERVE_MODEL ? [this.defaultModel] : []),
     ];
 
-    let stream: any = null;
+    let stream: Awaited<ReturnType<typeof client.models.generateContentStream>> | null = null;
     let lastError: unknown;
 
     for (const model of candidateModels) {

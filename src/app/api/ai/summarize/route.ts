@@ -7,6 +7,7 @@ import { getProvider, REPORT_MODEL } from "@/lib/ai/registry";
 import { getAuthUser } from "@/lib/auth";
 import { buildAdaptiveReport, DEFAULT_ADAPTIVE_CONFIG } from "@/lib/adaptive";
 import type { AdaptiveConfig, LiveAdaptiveState } from "@/lib/adaptive/types";
+import type { Json } from "@/lib/supabase/types";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
     const { data: interviewSession } = await supabaseAdmin
       .from("sessions")
       .select(
-        `*, interview:interviews!inner(title, userId, projectId, objective, language, assessmentCriteria, questions(text, order, type)), messages(*)`,
+        `*, interview:interviews!inner(title, userId, projectId, objective, language, assessmentCriteria, adaptiveConfig, questions(text, order, type)), messages(*)`,
       )
       .eq("id", sessionId)
       .order("order", { referencedTable: "interviews.questions", ascending: true })
@@ -45,6 +46,7 @@ export async function POST(req: Request) {
       objective: string | null;
       language: string;
       assessmentCriteria: { name: string; description: string }[] | null;
+      adaptiveConfig: Json | null;
       questions: { text: string; order: number; type?: string }[];
     };
 
@@ -178,7 +180,15 @@ export async function POST(req: Request) {
       try {
         const liveState = interviewSession.adaptiveState as LiveAdaptiveState;
         const poolSize = interview.questions.length;
-        const adaptiveConfig = ((interview as any).adaptiveConfig ?? DEFAULT_ADAPTIVE_CONFIG) as AdaptiveConfig;
+        const storedConfig = interview.adaptiveConfig;
+        const adaptiveConfig: AdaptiveConfig = {
+          ...DEFAULT_ADAPTIVE_CONFIG,
+          ...(typeof storedConfig === "object" &&
+          storedConfig !== null &&
+          !Array.isArray(storedConfig)
+            ? storedConfig
+            : {}),
+        };
         const adaptiveReport = buildAdaptiveReport(liveState, poolSize, adaptiveConfig);
         updatePayload.adaptiveReport = adaptiveReport;
       } catch (err) {
